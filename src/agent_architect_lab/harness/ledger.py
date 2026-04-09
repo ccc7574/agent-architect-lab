@@ -345,6 +345,15 @@ class DeployPolicy:
 
 
 @dataclass(slots=True)
+class EnvironmentPolicySpec:
+    required_state: str = "approved"
+    required_approver_roles: list[str] = field(default_factory=list)
+    required_predecessor_environment: str | None = None
+    soak_minutes_required: int = 0
+    freeze_windows: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class EnvironmentHistoryEntry:
     environment: str
     release_name: str
@@ -464,18 +473,25 @@ class ReleaseLedger:
         *,
         production_soak_minutes: int,
         required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
         environment_freeze_windows: dict[str, list[str]],
     ) -> DeployPolicy:
         status = self.environment_status(environment)
-        freeze_windows = list(environment_freeze_windows.get(environment, []))
+        resolved_policy = _resolve_environment_policy(
+            environment,
+            production_soak_minutes=production_soak_minutes,
+            required_approver_roles=required_approver_roles,
+            environment_policies=environment_policies,
+            environment_freeze_windows=environment_freeze_windows,
+        )
         return DeployPolicy(
             environment=environment,
-            required_state="approved",
-            required_approver_roles=list(required_approver_roles) if environment == "production" else [],
-            required_predecessor_environment="staging" if environment == "production" else None,
-            soak_minutes_required=production_soak_minutes if environment == "production" else 0,
-            freeze_windows=freeze_windows,
-            active_freeze_window=_active_freeze_window(environment, freeze_windows),
+            required_state=resolved_policy.required_state,
+            required_approver_roles=list(resolved_policy.required_approver_roles),
+            required_predecessor_environment=resolved_policy.required_predecessor_environment,
+            soak_minutes_required=resolved_policy.soak_minutes_required,
+            freeze_windows=list(resolved_policy.freeze_windows),
+            active_freeze_window=_active_freeze_window(environment, resolved_policy.freeze_windows),
             environment_status=status.status,
             active_release=status.active_release,
             active_release_deployed_at=status.deployed_at,
@@ -521,6 +537,7 @@ class ReleaseLedger:
         release_name: str | None,
         production_soak_minutes: int,
         required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
         environment_freeze_windows: dict[str, list[str]],
     ) -> RolloutMatrix:
         if release_name is not None:
@@ -531,6 +548,7 @@ class ReleaseLedger:
                 environment,
                 production_soak_minutes=production_soak_minutes,
                 required_approver_roles=required_approver_roles,
+                environment_policies=environment_policies,
                 environment_freeze_windows=environment_freeze_windows,
             )
             readiness = None
@@ -540,6 +558,7 @@ class ReleaseLedger:
                     environment,
                     production_soak_minutes=production_soak_minutes,
                     required_approver_roles=required_approver_roles,
+                    environment_policies=environment_policies,
                     environment_freeze_windows=environment_freeze_windows,
                 )
             rows.append(
@@ -567,37 +586,46 @@ class ReleaseLedger:
         *,
         production_soak_minutes: int,
         required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
         environment_freeze_windows: dict[str, list[str]],
     ) -> DeployReadiness:
         record = self.get(release_name)
         blockers: list[str] = []
         approval_roles = sorted({approval.role for approval in record.approvals})
         evidence: list[str] = [f"release_state:{record.state}", f"approval_roles:{','.join(approval_roles) or 'none'}"]
-        predecessor_environment = "staging" if environment == "production" else None
+        resolved_policy = _resolve_environment_policy(
+            environment,
+            production_soak_minutes=production_soak_minutes,
+            required_approver_roles=required_approver_roles,
+            environment_policies=environment_policies,
+            environment_freeze_windows=environment_freeze_windows,
+        )
+        predecessor_environment = resolved_policy.required_predecessor_environment
         soak_minutes_observed: int | None = None
-        active_freeze_window = _active_freeze_window(environment, environment_freeze_windows.get(environment, []))
+        active_freeze_window = _active_freeze_window(environment, resolved_policy.freeze_windows)
 
-        if record.state not in {"approved", "promoted"}:
+        if not _state_satisfies_requirement(record.state, resolved_policy.required_state):
             blockers.append("release_not_approved")
 
         if active_freeze_window is not None:
             blockers.append("environment_frozen")
             evidence.append(f"freeze_window:{active_freeze_window}")
 
-        if environment == "production":
-            missing_roles = sorted(set(required_approver_roles) - set(approval_roles))
+        if resolved_policy.required_approver_roles:
+            missing_roles = sorted(set(resolved_policy.required_approver_roles) - set(approval_roles))
             if missing_roles:
                 blockers.append(f"missing_required_approvals:{','.join(missing_roles)}")
-            staging_deployment = _find_active_deployment(record, "staging")
-            if staging_deployment is None:
-                blockers.append("missing_active_staging_deployment")
+        if predecessor_environment is not None:
+            predecessor_deployment = _find_active_deployment(record, predecessor_environment)
+            if predecessor_deployment is None:
+                blockers.append(_missing_predecessor_blocker(predecessor_environment))
             else:
-                evidence.append(f"staging_deployed_at:{staging_deployment.deployed_at}")
-                soak_minutes_observed = _minutes_since(staging_deployment.deployed_at)
-                if soak_minutes_observed < production_soak_minutes:
-                    blockers.append("staging_soak_incomplete")
+                evidence.append(f"{predecessor_environment}_deployed_at:{predecessor_deployment.deployed_at}")
+                soak_minutes_observed = _minutes_since(predecessor_deployment.deployed_at)
+                if soak_minutes_observed < resolved_policy.soak_minutes_required:
+                    blockers.append(_predecessor_soak_blocker(predecessor_environment))
                     evidence.append(
-                        f"staging_soak_minutes:{soak_minutes_observed}/{production_soak_minutes}"
+                        f"{predecessor_environment}_soak_minutes:{soak_minutes_observed}/{resolved_policy.soak_minutes_required}"
                     )
 
         current_head = _current_environment_head(self.records, environment)
@@ -610,9 +638,9 @@ class ReleaseLedger:
             passed=not blockers,
             blockers=blockers,
             evidence=evidence,
-            required_state="approved",
+            required_state=resolved_policy.required_state,
             required_predecessor_environment=predecessor_environment,
-            soak_minutes_required=production_soak_minutes if environment == "production" else 0,
+            soak_minutes_required=resolved_policy.soak_minutes_required,
             soak_minutes_observed=soak_minutes_observed,
             active_freeze_window=active_freeze_window,
         )
@@ -707,6 +735,7 @@ class ReleaseLedger:
         *,
         production_soak_minutes: int,
         required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
         environment_freeze_windows: dict[str, list[str]],
     ) -> ReleaseRecord:
         record = self.get(release_name)
@@ -715,6 +744,7 @@ class ReleaseLedger:
             environment,
             production_soak_minutes=production_soak_minutes,
             required_approver_roles=required_approver_roles,
+            environment_policies=environment_policies,
             environment_freeze_windows=environment_freeze_windows,
         )
         if not readiness.passed:
@@ -903,6 +933,77 @@ def _active_freeze_window(environment: str, freeze_windows: list[str], *, now: d
     return None
 
 
+def _state_satisfies_requirement(current_state: str, required_state: str) -> bool:
+    state_rank = {
+        "blocked": 0,
+        "pending_approval": 1,
+        "approved": 2,
+        "promoted": 3,
+    }
+    if current_state == "rejected":
+        return False
+    return state_rank.get(current_state, -1) >= state_rank.get(required_state, -1)
+
+
+def _normalize_policy_roles(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(role).strip() for role in value if str(role).strip()]
+    return [role.strip() for role in str(value or "").split(",") if role.strip()]
+
+
+def _normalize_freeze_windows(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(window).strip() for window in value if str(window).strip()]
+    return [window.strip() for window in str(value or "").split(",") if window.strip()]
+
+
+def _resolve_environment_policy(
+    environment: str,
+    *,
+    production_soak_minutes: int,
+    required_approver_roles: list[str],
+    environment_policies: dict[str, dict[str, object]],
+    environment_freeze_windows: dict[str, list[str]],
+) -> EnvironmentPolicySpec:
+    policy = dict(environment_policies.get(environment, {}))
+    required_state = str(policy.get("required_state", "approved"))
+    predecessor_environment = policy.get("required_predecessor_environment")
+    if predecessor_environment is not None:
+        predecessor_environment = str(predecessor_environment).strip() or None
+    elif environment == "production":
+        predecessor_environment = "staging"
+    soak_minutes_required = int(policy.get("soak_minutes_required", production_soak_minutes if environment == "production" else 0))
+    roles = (
+        _normalize_policy_roles(policy["required_approver_roles"])
+        if "required_approver_roles" in policy
+        else (list(required_approver_roles) if environment == "production" else [])
+    )
+    freeze_windows = (
+        _normalize_freeze_windows(policy["freeze_windows"])
+        if "freeze_windows" in policy
+        else list(environment_freeze_windows.get(environment, []))
+    )
+    return EnvironmentPolicySpec(
+        required_state=required_state,
+        required_approver_roles=roles,
+        required_predecessor_environment=predecessor_environment,
+        soak_minutes_required=soak_minutes_required,
+        freeze_windows=freeze_windows,
+    )
+
+
+def _missing_predecessor_blocker(environment: str) -> str:
+    if environment == "staging":
+        return "missing_active_staging_deployment"
+    return f"missing_active_predecessor_deployment:{environment}"
+
+
+def _predecessor_soak_blocker(environment: str) -> str:
+    if environment == "staging":
+        return "staging_soak_incomplete"
+    return f"predecessor_soak_incomplete:{environment}"
+
+
 def _latest_timestamp(*timestamps: str | None) -> str:
     present = [timestamp for timestamp in timestamps if timestamp]
     if not present:
@@ -925,12 +1026,16 @@ def _recommended_rollout_action(readiness: DeployReadiness | None) -> str:
         return "approve_release"
     if any(blocker.startswith("missing_required_approvals:") for blocker in blockers):
         return "collect_required_approvals"
-    if "missing_active_staging_deployment" in blockers:
-        return "deploy_to_staging_first"
-    if "staging_soak_incomplete" in blockers:
-        return "wait_for_staging_soak"
     if "environment_frozen" in blockers:
         return "wait_for_freeze_window"
+    if "missing_active_staging_deployment" in blockers:
+        return "deploy_to_staging_first"
+    if any(blocker.startswith("missing_active_predecessor_deployment:") for blocker in blockers):
+        return "deploy_to_predecessor_first"
+    if "staging_soak_incomplete" in blockers:
+        return "wait_for_staging_soak"
+    if any(blocker.startswith("predecessor_soak_incomplete:") for blocker in blockers):
+        return "wait_for_predecessor_soak"
     return "resolve_blockers"
 
 
@@ -1020,6 +1125,7 @@ def deploy_release(
     ledger_path: Path,
     production_soak_minutes: int = 30,
     required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
     environment_freeze_windows: dict[str, list[str]] | None = None,
 ) -> ReleaseRecord:
     ledger = ReleaseLedger.load(ledger_path)
@@ -1030,6 +1136,7 @@ def deploy_release(
         note,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
     ledger.save(ledger_path)
@@ -1043,6 +1150,7 @@ def check_deploy_readiness(
     ledger_path: Path,
     production_soak_minutes: int = 30,
     required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
     environment_freeze_windows: dict[str, list[str]] | None = None,
 ) -> DeployReadiness:
     ledger = ReleaseLedger.load(ledger_path)
@@ -1051,6 +1159,7 @@ def check_deploy_readiness(
         environment,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
 
@@ -1061,6 +1170,7 @@ def get_deploy_policy(
     ledger_path: Path,
     production_soak_minutes: int = 30,
     required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
     environment_freeze_windows: dict[str, list[str]] | None = None,
 ) -> DeployPolicy:
     ledger = ReleaseLedger.load(ledger_path)
@@ -1068,6 +1178,7 @@ def get_deploy_policy(
         environment,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
 
@@ -1089,6 +1200,7 @@ def get_rollout_matrix(
     release_name: str | None = None,
     production_soak_minutes: int = 30,
     required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
     environment_freeze_windows: dict[str, list[str]] | None = None,
 ) -> RolloutMatrix:
     ledger = ReleaseLedger.load(ledger_path)
@@ -1097,6 +1209,7 @@ def get_rollout_matrix(
         release_name=release_name,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
 

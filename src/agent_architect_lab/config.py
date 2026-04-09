@@ -30,6 +30,7 @@ class Settings:
     production_soak_minutes: int
     production_required_approver_roles: list[str]
     environment_names: list[str]
+    environment_policies: dict[str, dict[str, object]]
     environment_freeze_windows: dict[str, list[str]]
 
 
@@ -69,20 +70,57 @@ def load_settings() -> Settings:
         ).split(",")
         if role.strip()
     ]
-    environment_names = [
-        environment.strip()
-        for environment in os.environ.get(
-            "AGENT_ARCHITECT_LAB_ENVIRONMENTS",
-            "staging,production",
-        ).split(",")
-        if environment.strip()
-    ]
+    raw_environment_policies = json.loads(
+        os.environ.get("AGENT_ARCHITECT_LAB_ENVIRONMENT_POLICIES", "{}")
+    )
+    environment_policies = {
+        str(environment): {
+            "required_state": str(policy.get("required_state", "approved")),
+            "required_predecessor_environment": (
+                str(policy["required_predecessor_environment"])
+                if policy.get("required_predecessor_environment")
+                else None
+            ),
+            "soak_minutes_required": int(policy.get("soak_minutes_required", 0)),
+            "required_approver_roles": [
+                str(role)
+                for role in (
+                    policy.get("required_approver_roles", [])
+                    if isinstance(policy.get("required_approver_roles", []), list)
+                    else str(policy.get("required_approver_roles", "")).split(",")
+                )
+                if str(role).strip()
+            ],
+            "freeze_windows": [
+                str(window)
+                for window in (
+                    policy.get("freeze_windows", [])
+                    if isinstance(policy.get("freeze_windows", []), list)
+                    else str(policy.get("freeze_windows", "")).split(",")
+                )
+                if str(window).strip()
+            ],
+        }
+        for environment, policy in raw_environment_policies.items()
+    }
     environment_freeze_windows = {
         str(environment): [str(window) for window in windows]
         for environment, windows in json.loads(
             os.environ.get("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", "{}")
         ).items()
     }
+    configured_environment_names = os.environ.get("AGENT_ARCHITECT_LAB_ENVIRONMENTS")
+    if configured_environment_names is not None:
+        environment_names = [
+            environment.strip()
+            for environment in configured_environment_names.split(",")
+            if environment.strip()
+        ]
+    else:
+        environment_names = ["staging", "production"]
+        for environment in list(environment_policies) + list(environment_freeze_windows):
+            if environment not in environment_names:
+                environment_names.append(environment)
 
     for directory in (
         artifacts_dir,
@@ -118,5 +156,6 @@ def load_settings() -> Settings:
         production_soak_minutes=production_soak_minutes,
         production_required_approver_roles=production_required_approver_roles,
         environment_names=environment_names,
+        environment_policies=environment_policies,
         environment_freeze_windows=environment_freeze_windows,
     )

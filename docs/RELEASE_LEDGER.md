@@ -49,6 +49,26 @@ Freeze windows are controlled by `AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS
 
 When a deploy readiness check lands inside one of these windows, the result includes the `environment_frozen` blocker plus the matched `active_freeze_window`.
 
+More advanced environment chains can be declared with `AGENT_ARCHITECT_LAB_ENVIRONMENT_POLICIES`. This extends the default `staging -> production` model into arbitrary environment graphs:
+
+```json
+{
+  "canary": {
+    "required_predecessor_environment": "staging",
+    "required_approver_roles": ["qa-owner"],
+    "soak_minutes_required": 5
+  },
+  "production": {
+    "required_predecessor_environment": "canary",
+    "required_approver_roles": ["ops-oncall"],
+    "soak_minutes_required": 30,
+    "freeze_windows": ["22:00-23:59", "00:00-01:00"]
+  }
+}
+```
+
+When configured, `deploy-policy`, `check-deploy-readiness`, and `rollout-matrix` all resolve policy from this environment-specific model instead of relying only on the built-in production defaults.
+
 ## Commands
 
 Create a release record while running multi-suite shadow review:

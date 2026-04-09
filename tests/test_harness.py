@@ -969,3 +969,74 @@ def test_get_rollout_matrix_without_release_only_reports_environment_views(tmp_p
     assert matrix.rows[0].readiness is None
     assert matrix.rows[0].recommended_action == "observe_environment"
     assert matrix.rows[1].policy.freeze_windows == ["23:00-23:59"]
+
+
+def test_environment_specific_policies_extend_readiness_chain(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-chain", report_prefix="chain", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    environment_policies = {
+        "canary": {
+            "required_predecessor_environment": "staging",
+            "required_approver_roles": ["qa-owner"],
+            "soak_minutes_required": 0,
+        },
+        "production": {
+            "required_predecessor_environment": "canary",
+            "required_approver_roles": ["ops-oncall"],
+            "soak_minutes_required": 10,
+            "freeze_windows": ["00:00-23:59"],
+        },
+    }
+
+    transition_release("release-chain", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release("release-chain", environment="staging", actor="release-manager", note="deploy staging", ledger_path=ledger_path)
+
+    canary_readiness = check_deploy_readiness(
+        "release-chain",
+        environment="canary",
+        ledger_path=ledger_path,
+        environment_policies=environment_policies,
+    )
+    assert canary_readiness.passed is True
+
+    deploy_release(
+        "release-chain",
+        environment="canary",
+        actor="release-manager",
+        note="deploy canary",
+        ledger_path=ledger_path,
+        environment_policies=environment_policies,
+    )
+
+    production_policy = get_deploy_policy(
+        "production",
+        ledger_path=ledger_path,
+        environment_policies=environment_policies,
+    )
+    production_readiness = check_deploy_readiness(
+        "release-chain",
+        environment="production",
+        ledger_path=ledger_path,
+        environment_policies=environment_policies,
+    )
+
+    assert production_policy.required_predecessor_environment == "canary"
+    assert production_policy.required_approver_roles == ["ops-oncall"]
+    assert production_policy.soak_minutes_required == 10
+    assert production_policy.freeze_windows == ["00:00-23:59"]
+    assert production_readiness.passed is False
+    assert "missing_required_approvals:ops-oncall" in production_readiness.blockers
+    assert "environment_frozen" in production_readiness.blockers
+    assert "predecessor_soak_incomplete:canary" in production_readiness.blockers

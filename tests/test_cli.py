@@ -338,3 +338,26 @@ def test_cmd_rollout_matrix_respects_explicit_environment_override(monkeypatch, 
     assert payload["environments"] == ["canary"]
     assert payload["rows"][0]["environment"] == "canary"
     assert payload["rows"][0]["recommended_action"] == "observe_environment"
+
+
+def test_cmd_rollout_matrix_includes_policy_defined_environments(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.delenv("AGENT_ARCHITECT_LAB_ENVIRONMENTS", raising=False)
+    monkeypatch.setenv(
+        "AGENT_ARCHITECT_LAB_ENVIRONMENT_POLICIES",
+        '{"canary":{"required_predecessor_environment":"staging","required_approver_roles":["qa-owner"],"soak_minutes_required":5}}',
+    )
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_rollout_matrix("", [])
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["environments"] == ["staging", "production", "canary"]
+    assert payload["rows"][2]["environment"] == "canary"
+    assert payload["rows"][2]["policy"]["required_predecessor_environment"] == "staging"
+    assert payload["rows"][2]["policy"]["required_approver_roles"] == ["qa-owner"]
