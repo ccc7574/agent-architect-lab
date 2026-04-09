@@ -1,0 +1,12 @@
+{
+  "id": "skill_router",
+  "name": "Skill Router",
+  "description": "Select the smallest useful set of skills for a goal and document the handoff between them.",
+  "triggers": ["agent skills", "skill routing", "skill catalog", "skill selection", "tool selection"],
+  "tools": ["read_file", "search_notes"],
+  "operating_notes": [
+    "Prefer a minimal skill set for each task to reduce prompt bloat.",
+    "Match on triggers, task shape, and required tools.",
+    "Treat skill descriptions as operating contracts, not marketing copy."
+  ]
+}

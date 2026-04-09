@@ -1,0 +1,3 @@
+# Operator and incident workflow tasks.
+{"id":"ops-incident-summary","goal":"incident rollback workflow for agent platform","grader":{"type":"all","checks":[{"type":"contains","expected":["rollback","owner","failure taxonomy"]},{"type":"tool_used","expected":["search_notes","get_note"]}]},"metadata":{"track":"operations","difficulty":"medium"}}
+{"id":"ops-observability","goal":"observability dashboards for agent incidents","grader":{"type":"all","checks":[{"type":"contains","expected":["dashboards","traces","alerts"]},{"type":"tool_used","expected":["search_notes","get_note"]}]},"metadata":{"track":"operations","difficulty":"medium"}}

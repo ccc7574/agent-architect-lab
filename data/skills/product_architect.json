@@ -1,0 +1,12 @@
+{
+  "id": "product_architect",
+  "name": "Agent Product Architect",
+  "description": "Design an agent product stack with orchestration, safety, memory, skills, harnesses, and operator workflows.",
+  "triggers": ["product architecture", "openclaw style", "agent platform", "agent product design", "multi-agent system"],
+  "tools": ["search_notes", "read_file", "write_file"],
+  "operating_notes": [
+    "Model the product as planes: control, execution, knowledge, evaluation, and operations.",
+    "Define clear ownership boundaries between runtime, tools, skills, and review systems.",
+    "Treat observability and rollback as first-class requirements."
+  ]
+}

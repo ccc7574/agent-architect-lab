@@ -1,0 +1,5 @@
+# Local deterministic tasks for the learning harness.
+{"id":"eval-summarize-pyproject","goal":"summarize 'pyproject.toml'","expected_contains":["agent-architect-lab","runtime","safety"],"metadata":{"track":"runtime-basics","difficulty":"easy"}}
+{"id":"eval-find-cli","goal":"find 'cli.py'","expected_contains":["src/agent_architect_lab/cli.py"],"metadata":{"track":"tool-use","difficulty":"easy"}}
+{"id":"eval-shell-pwd","goal":"run `pwd`","expected_contains":["agent-architect-lab"],"metadata":{"track":"sandbox","difficulty":"easy"}}
+{"id":"eval-memory-retrieval","goal":"memory retrieval system design","expected_contains":["memory","retrieval"],"metadata":{"track":"mcp-notes","difficulty":"medium"}}

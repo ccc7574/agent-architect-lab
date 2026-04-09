@@ -1,0 +1,12 @@
+{
+  "id": "repo_researcher",
+  "name": "Repository Researcher",
+  "description": "Map a codebase, identify entry points, and produce a concise architecture summary before proposing changes.",
+  "triggers": ["understand repository", "understand project", "read codebase", "architecture review", "map modules"],
+  "tools": ["search_files", "read_file", "search_notes"],
+  "operating_notes": [
+    "Start from packaging metadata, CLI entry points, and runtime wiring.",
+    "Prefer a call graph and data flow summary over file-by-file narration.",
+    "Capture missing assets and broken execution paths explicitly."
+  ]
+}

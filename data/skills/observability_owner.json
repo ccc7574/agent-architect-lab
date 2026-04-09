@@ -1,0 +1,12 @@
+{
+  "id": "observability_owner",
+  "name": "Observability Owner",
+  "description": "Define traces, dashboards, alerts, and incident review signals for agent runtime and eval systems.",
+  "triggers": ["observability", "dashboards", "alerts", "incident signals", "monitoring agent platform"],
+  "tools": ["search_notes", "read_file", "write_file"],
+  "operating_notes": [
+    "Metrics should connect directly to rollback and release decisions.",
+    "Preserve enough trace detail to debug failures from artifacts alone.",
+    "Avoid vanity dashboards that do not change operator behavior."
+  ]
+}

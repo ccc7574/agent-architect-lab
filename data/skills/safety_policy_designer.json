@@ -1,0 +1,12 @@
+{
+  "id": "safety_policy_designer",
+  "name": "Safety Policy Designer",
+  "description": "Define execution guardrails, sandbox boundaries, and tool-specific policies for agent actions.",
+  "triggers": ["safety policy", "sandbox design", "tool safety", "approval workflow", "guardrails"],
+  "tools": ["read_file", "write_file", "run_shell", "search_notes"],
+  "operating_notes": [
+    "Block categories of actions, not just individual commands.",
+    "Log policy decisions into traces and checkpoints for auditability.",
+    "Design explicit escalation paths for high-risk actions."
+  ]
+}

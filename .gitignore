@@ -1,0 +1,6 @@
+.DS_Store
+.pytest_cache/
+.agent_lab_artifacts/
+artifacts/
+__pycache__/
+*.pyc

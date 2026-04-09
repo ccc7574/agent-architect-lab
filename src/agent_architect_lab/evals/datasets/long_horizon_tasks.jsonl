@@ -1,0 +1,3 @@
+# Long-horizon architecture tasks using the deterministic planner.
+{"id":"long-horizon-product-planes","goal":"openclaw style product architecture planes for agent platform roadmap","grader":{"type":"all","checks":[{"type":"contains","expected":["control plane","execution plane","knowledge plane"]},{"type":"tool_used","expected":["search_notes","get_note"]},{"type":"max_steps","value":3}]},"metadata":{"track":"long-horizon","difficulty":"medium"}}
+{"id":"long-horizon-evals-roadmap","goal":"evals release gates and regression workflow","grader":{"type":"all","checks":[{"type":"contains","expected":["release gates","regressions","shadow runs"]},{"type":"tool_used","expected":["search_notes","get_note"]}]},"metadata":{"track":"long-horizon","difficulty":"medium"}}

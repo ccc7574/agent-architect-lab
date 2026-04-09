@@ -1,0 +1,12 @@
+{
+  "id": "safeguards_architect",
+  "name": "Safeguards Architect",
+  "description": "Design layered safeguards across planning, tool execution, sandbox boundaries, approvals, and audit trails.",
+  "triggers": ["safeguards", "execution boundary", "approval gate", "agent safety architecture", "policy enforcement"],
+  "tools": ["search_notes", "read_file", "write_file"],
+  "operating_notes": [
+    "Block risky action categories before debating individual commands.",
+    "Make approval thresholds explicit and reviewable.",
+    "Keep safety decisions observable through traces, checkpoints, and reports."
+  ]
+}

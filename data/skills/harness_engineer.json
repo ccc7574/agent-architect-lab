@@ -1,0 +1,12 @@
+{
+  "id": "harness_engineer",
+  "name": "Harness Engineer",
+  "description": "Design reliable eval suites, aggregate metrics, and regression checks for agent behavior.",
+  "triggers": ["eval harness", "harness practice", "regression suite", "evaluation workflow", "grading agent"],
+  "tools": ["read_file", "write_file", "run_shell", "search_notes"],
+  "operating_notes": [
+    "Separate task definitions, grading logic, and reporting outputs.",
+    "Track success rate, score, step count, and failure modes together.",
+    "Prefer deterministic local tasks before API-backed scenarios."
+  ]
+}

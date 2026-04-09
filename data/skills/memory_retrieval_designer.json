@@ -1,0 +1,12 @@
+{
+  "id": "memory_retrieval_designer",
+  "name": "Memory Retrieval Designer",
+  "description": "Shape short-term memory, long-term memory, note retrieval, and checkpointing patterns for agents.",
+  "triggers": ["memory retrieval", "agent memory", "retrieval design", "context management", "checkpoint strategy"],
+  "tools": ["search_notes", "read_file", "write_file"],
+  "operating_notes": [
+    "Keep working memory compact and task-scoped.",
+    "Store durable traces separately from retrieval notes and checkpoints.",
+    "Optimize for recall quality before adding retrieval complexity."
+  ]
+}

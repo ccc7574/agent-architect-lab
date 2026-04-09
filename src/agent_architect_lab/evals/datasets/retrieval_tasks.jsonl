@@ -1,0 +1,3 @@
+# Retrieval and knowledge-system tasks.
+{"id":"retrieval-memory-note","goal":"memory retrieval system design","grader":{"type":"all","checks":[{"type":"contains","expected":["working memory","notes or knowledge base"]},{"type":"tool_used","expected":["search_notes","get_note"]},{"type":"max_steps","value":3}]},"metadata":{"track":"retrieval","difficulty":"medium"}}
+{"id":"retrieval-safety-note","goal":"safety policy approval workflow and guardrails","grader":{"type":"all","checks":[{"type":"contains","expected":["human approval paths","default-deny"]},{"type":"tool_used","expected":["search_notes","get_note"]}]},"metadata":{"track":"retrieval","difficulty":"medium"}}
