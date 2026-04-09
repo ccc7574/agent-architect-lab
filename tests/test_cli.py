@@ -14,6 +14,7 @@ from agent_architect_lab.cli import (
     cmd_environment_status,
     cmd_explain_patterns,
     cmd_grant_release_override,
+    cmd_list_active_overrides,
     cmd_list_skills,
     cmd_list_releases,
     cmd_promote_release,
@@ -402,3 +403,32 @@ def test_cmd_grant_release_override_unblocks_readiness(monkeypatch, tmp_path: Pa
     assert waived_exit == 0
     assert waived_payload["blockers"] == []
     assert "override_applied:environment_frozen:incident-commander" in waived_payload["evidence"]
+
+
+def test_cmd_list_active_overrides_reports_current_entries(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"staging":["00:00-23:59"]}')
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-a",
+            "staging",
+            "environment_frozen",
+            "incident-commander",
+            "hotfix waiver",
+            "",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_list_active_overrides("", "staging", 10)
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert len(payload) == 1
+    assert payload[0]["release_name"] == "release-a"
+    assert payload[0]["environment"] == "staging"
+    assert payload[0]["blocker"] == "environment_frozen"

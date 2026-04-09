@@ -21,6 +21,7 @@ from agent_architect_lab.harness.ledger import (
     get_deploy_policy,
     get_release_record,
     grant_release_override,
+    list_active_overrides,
     list_releases,
     record_release_candidate,
     rollback_release,
@@ -171,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     environment_history_cmd = subparsers.add_parser("environment-history", help="Show recent deployment lineage for an environment.")
     environment_history_cmd.add_argument("--environment", required=True, help="Deployment environment to inspect.")
     environment_history_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of deployment entries to return.")
+
+    active_overrides_cmd = subparsers.add_parser("list-active-overrides", help="Show currently effective release overrides for audit and incident review.")
+    active_overrides_cmd.add_argument("--release-name", default="", help="Optional release filter.")
+    active_overrides_cmd.add_argument("--environment", default="", help="Optional environment filter.")
+    active_overrides_cmd.add_argument("--limit", type=int, default=50, help="Maximum number of active overrides to return.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -524,6 +530,18 @@ def cmd_environment_history(environment: str, limit: int) -> int:
     return 0
 
 
+def cmd_list_active_overrides(release_name: str, environment: str, limit: int) -> int:
+    settings = load_settings()
+    entries = list_active_overrides(
+        ledger_path=settings.release_ledger_path,
+        release_name=release_name or None,
+        environment=environment or None,
+        limit=limit,
+    )
+    print(json.dumps([entry.to_dict() for entry in entries], indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -657,6 +675,8 @@ def main() -> int:
         return cmd_environment_status(args.environment)
     if args.command == "environment-history":
         return cmd_environment_history(args.environment, args.limit)
+    if args.command == "list-active-overrides":
+        return cmd_list_active_overrides(args.release_name, args.environment, args.limit)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":

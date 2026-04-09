@@ -155,6 +155,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli grant-release-override \
   --note "emergency hotfix waiver"
 ```
 
+Audit currently active overrides:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
+```
+
 Inspect current state and event history:
 
 ```bash
@@ -166,6 +172,7 @@ Operator-oriented summary commands:
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
@@ -175,6 +182,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environme
 The default environment list used by `rollout-matrix` comes from `AGENT_ARCHITECT_LAB_ENVIRONMENTS` and defaults to `staging,production`.
 When a release name is supplied, each matrix row also includes a `recommended_action` such as `deploy`, `collect_required_approvals`, `wait_for_staging_soak`, or `wait_for_freeze_window`.
 Overrides are scoped to one release, one environment, and one exact blocker string. They are intended for time-bounded emergency waivers, not as a replacement for normal approval flow.
+`list-active-overrides` only returns overrides whose expiry has not passed yet.
 
 ## Why This Matters
 

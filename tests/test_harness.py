@@ -17,6 +17,7 @@ from agent_architect_lab.harness.ledger import (
     deploy_release,
     grant_release_override,
     get_environment_status,
+    list_active_overrides,
     list_releases,
     record_release_candidate,
     rollback_release,
@@ -1119,3 +1120,53 @@ def test_release_override_rejects_non_overridable_blocker(tmp_path: Path) -> Non
         assert "cannot be overridden" in str(exc)
     else:
         raise AssertionError("Expected non-overridable blocker to raise ValueError.")
+
+
+def test_list_active_overrides_filters_and_skips_expired_entries(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-a", report_prefix="a", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-b", report_prefix="b", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-a", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-b", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+
+    grant_release_override(
+        "release-a",
+        environment="staging",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="active",
+        ledger_path=ledger_path,
+    )
+    grant_release_override(
+        "release-b",
+        environment="production",
+        blocker="missing_required_approvals:ops-oncall",
+        actor="release-director",
+        note="expired",
+        expires_at="2000-01-01T00:00:00+00:00",
+        ledger_path=ledger_path,
+    )
+
+    all_entries = list_active_overrides(ledger_path=ledger_path)
+    staging_entries = list_active_overrides(ledger_path=ledger_path, environment="staging")
+    release_entries = list_active_overrides(ledger_path=ledger_path, release_name="release-a")
+
+    assert len(all_entries) == 1
+    assert all_entries[0].release_name == "release-a"
+    assert all_entries[0].environment == "staging"
+    assert len(staging_entries) == 1
+    assert staging_entries[0].blocker == "environment_frozen"
+    assert len(release_entries) == 1
+    assert release_entries[0].actor == "incident-commander"

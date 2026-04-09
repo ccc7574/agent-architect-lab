@@ -424,6 +424,28 @@ class EnvironmentHistoryEntry:
 
 
 @dataclass(slots=True)
+class ActiveOverrideEntry:
+    release_name: str
+    environment: str
+    blocker: str
+    actor: str
+    created_at: str
+    note: str = ""
+    expires_at: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "release_name": self.release_name,
+            "environment": self.environment,
+            "blocker": self.blocker,
+            "actor": self.actor,
+            "created_at": self.created_at,
+            "note": self.note,
+            "expires_at": self.expires_at,
+        }
+
+
+@dataclass(slots=True)
 class RolloutMatrixRow:
     environment: str
     policy: DeployPolicy
@@ -562,6 +584,42 @@ class ReleaseLedger:
                     )
                 )
         entries.sort(key=lambda item: item.last_transition_at, reverse=True)
+        return entries[:limit]
+
+    def active_overrides(
+        self,
+        *,
+        release_name: str | None = None,
+        environment: str | None = None,
+        limit: int = 50,
+    ) -> list[ActiveOverrideEntry]:
+        entries: list[ActiveOverrideEntry] = []
+        for record in self.records:
+            if release_name is not None and record.release_name != release_name:
+                continue
+            for override in record.overrides:
+                if environment is not None and override.environment != environment:
+                    continue
+                if not _override_is_active(override):
+                    continue
+                entries.append(
+                    ActiveOverrideEntry(
+                        release_name=record.release_name,
+                        environment=override.environment,
+                        blocker=override.blocker,
+                        actor=override.actor,
+                        created_at=override.created_at,
+                        note=override.note,
+                        expires_at=override.expires_at,
+                    )
+                )
+        entries.sort(
+            key=lambda item: (
+                item.expires_at is None,
+                item.expires_at or item.created_at,
+                item.created_at,
+            )
+        )
         return entries[:limit]
 
     def rollout_matrix(
@@ -1314,6 +1372,21 @@ def get_environment_history(
 ) -> list[EnvironmentHistoryEntry]:
     ledger = ReleaseLedger.load(ledger_path)
     return ledger.environment_history(environment, limit=limit)
+
+
+def list_active_overrides(
+    *,
+    ledger_path: Path,
+    release_name: str | None = None,
+    environment: str | None = None,
+    limit: int = 50,
+) -> list[ActiveOverrideEntry]:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.active_overrides(
+        release_name=release_name,
+        environment=environment,
+        limit=limit,
+    )
 
 
 def get_rollout_matrix(
