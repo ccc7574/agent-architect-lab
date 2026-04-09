@@ -11,6 +11,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     get_deploy_policy,
     get_environment_history,
+    get_override_review_board,
     get_release_readiness_digest,
     get_release_risk_board,
     get_rollout_matrix,
@@ -1283,3 +1284,60 @@ def test_release_risk_board_ranks_releases_by_operator_risk(tmp_path: Path) -> N
     assert board.rows[0].expiring_override_count == 1
     assert board.rows[1].risk_level == "low"
     assert board.rows[1].next_action == "observe_release"
+
+
+def test_override_review_board_prioritizes_expired_and_expiring_entries(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-a", report_prefix="a", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-b", report_prefix="b", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-a", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-b", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    grant_release_override(
+        "release-a",
+        environment="production",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="expired",
+        expires_at="2000-01-01T00:00:00+00:00",
+        ledger_path=ledger_path,
+    )
+    grant_release_override(
+        "release-b",
+        environment="production",
+        blocker="missing_required_approvals:ops-oncall",
+        actor="release-director",
+        note="expiring soon",
+        expires_at="2999-01-01T00:30:00+00:00",
+        ledger_path=ledger_path,
+    )
+    grant_release_override(
+        "release-b",
+        environment="staging",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="no expiry",
+        ledger_path=ledger_path,
+    )
+
+    board = get_override_review_board(
+        ledger_path=ledger_path,
+        override_expiring_soon_minutes=999999999,
+        limit=10,
+    )
+
+    assert [row.status for row in board.rows[:3]] == ["expired", "expiring_soon", "active_no_expiry"]
+    assert board.rows[0].recommended_action == "remove_or_renew_override"
+    assert board.rows[1].recommended_action == "review_override_expiry"
+    assert board.rows[2].recommended_action == "add_override_expiry"

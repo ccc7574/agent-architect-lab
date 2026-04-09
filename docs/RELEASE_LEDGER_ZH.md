@@ -111,6 +111,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 ```
 
+查看 override 整改优先级看板：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
+```
+
 查看当前环境策略：
 
 ```bash
@@ -289,6 +295,24 @@ override 只用于紧急场景，不应该替代正常流程。
 - 当前 release state
 
 它的目标不是替代 `release-readiness-digest`，而是帮助值班人员先决定“先看哪个 release”。
+
+## override review board
+
+`override-review-board` 是面向治理和整改的 override 专项看板。
+
+它会把 override 分成几类：
+
+- `expired`
+- `expiring_soon`
+- `active_no_expiry`
+- `active`
+
+并为每条 override 给出整改动作，例如：
+
+- `remove_or_renew_override`
+- `review_override_expiry`
+- `add_override_expiry`
+- `observe_override`
 
 ## 推荐运维流程
 

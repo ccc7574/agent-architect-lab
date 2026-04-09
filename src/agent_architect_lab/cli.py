@@ -16,6 +16,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     deploy_release,
     get_environment_history,
+    get_override_review_board,
     get_release_readiness_digest,
     get_release_risk_board,
     get_rollout_matrix,
@@ -187,6 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     risk_board_cmd = subparsers.add_parser("release-risk-board", help="Show a ranked operator board across recorded releases.")
     risk_board_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
     risk_board_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of releases to include.")
+
+    override_review_board_cmd = subparsers.add_parser("override-review-board", help="Show override remediation priority across recorded releases.")
+    override_review_board_cmd.add_argument("--release-name", default="", help="Optional release filter.")
+    override_review_board_cmd.add_argument("--environment", default="", help="Optional environment filter.")
+    override_review_board_cmd.add_argument("--limit", type=int, default=50, help="Maximum number of override rows to include.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -584,6 +590,19 @@ def cmd_release_risk_board(environments: list[str], limit: int) -> int:
     return 0
 
 
+def cmd_override_review_board(release_name: str, environment: str, limit: int) -> int:
+    settings = load_settings()
+    board = get_override_review_board(
+        ledger_path=settings.release_ledger_path,
+        release_name=release_name or None,
+        environment=environment or None,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        limit=limit,
+    )
+    print(json.dumps(board.to_dict(), indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -723,6 +742,8 @@ def main() -> int:
         return cmd_release_readiness_digest(args.release_name, args.environments)
     if args.command == "release-risk-board":
         return cmd_release_risk_board(args.environments, args.limit)
+    if args.command == "override-review-board":
+        return cmd_override_review_board(args.release_name, args.environment, args.limit)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":

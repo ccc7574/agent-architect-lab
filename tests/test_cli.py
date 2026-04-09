@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_list_active_overrides,
     cmd_list_skills,
     cmd_list_releases,
+    cmd_override_review_board,
     cmd_promote_release,
     cmd_register_report,
     cmd_release_readiness_digest,
@@ -505,3 +506,42 @@ def test_cmd_release_risk_board_reports_ranked_rows(monkeypatch, tmp_path: Path)
     assert payload["rows"][0]["expiring_override_count"] == 1
     assert payload["rows"][1]["release_name"] == "release-low"
     assert payload["rows"][1]["risk_level"] == "low"
+
+
+def test_cmd_override_review_board_reports_remediation_priority(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-a",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "expired",
+            "2000-01-01T00:00:00+00:00",
+        )
+        cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
+        cmd_approve_release("release-b", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-b",
+            "staging",
+            "environment_frozen",
+            "incident-commander",
+            "no expiry",
+            "",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_override_review_board("", "", 10)
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["rows"][0]["status"] == "expired"
+    assert payload["rows"][0]["recommended_action"] == "remove_or_renew_override"
+    assert payload["rows"][1]["status"] == "active_no_expiry"
+    assert payload["rows"][1]["recommended_action"] == "add_override_expiry"

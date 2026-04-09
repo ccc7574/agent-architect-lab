@@ -546,6 +546,46 @@ class ReleaseRiskBoard:
 
 
 @dataclass(slots=True)
+class OverrideReviewBoardRow:
+    release_name: str
+    environment: str
+    blocker: str
+    actor: str
+    created_at: str
+    expires_at: str | None
+    note: str
+    status: str
+    risk_level: str
+    recommended_action: str
+    minutes_until_expiry: int | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "release_name": self.release_name,
+            "environment": self.environment,
+            "blocker": self.blocker,
+            "actor": self.actor,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "note": self.note,
+            "status": self.status,
+            "risk_level": self.risk_level,
+            "recommended_action": self.recommended_action,
+            "minutes_until_expiry": self.minutes_until_expiry,
+        }
+
+
+@dataclass(slots=True)
+class OverrideReviewBoard:
+    rows: list[OverrideReviewBoardRow] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "rows": [row.to_dict() for row in self.rows],
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -861,6 +901,52 @@ class ReleaseLedger:
             environments=list(environments),
             rows=rows,
         )
+
+    def override_review_board(
+        self,
+        *,
+        release_name: str | None = None,
+        environment: str | None = None,
+        override_expiring_soon_minutes: int,
+        limit: int,
+    ) -> OverrideReviewBoard:
+        rows: list[OverrideReviewBoardRow] = []
+        for record in self.list_records():
+            if release_name is not None and record.release_name != release_name:
+                continue
+            for override in record.overrides:
+                if environment is not None and override.environment != environment:
+                    continue
+                minutes_until_expiry = None
+                if override.expires_at is not None:
+                    minutes_until_expiry = _minutes_until(override.expires_at)
+                status = _override_review_status(
+                    override,
+                    override_expiring_soon_minutes=override_expiring_soon_minutes,
+                )
+                rows.append(
+                    OverrideReviewBoardRow(
+                        release_name=record.release_name,
+                        environment=override.environment,
+                        blocker=override.blocker,
+                        actor=override.actor,
+                        created_at=override.created_at,
+                        expires_at=override.expires_at,
+                        note=override.note,
+                        status=status,
+                        risk_level=_override_review_risk_level(status),
+                        recommended_action=_override_review_action(status),
+                        minutes_until_expiry=minutes_until_expiry,
+                    )
+                )
+        rows.sort(
+            key=lambda row: (
+                _override_review_priority(row.status),
+                row.minutes_until_expiry if row.minutes_until_expiry is not None else 10**12,
+                row.created_at,
+            )
+        )
+        return OverrideReviewBoard(rows=rows[:limit])
 
     def deploy_readiness(
         self,
@@ -1353,6 +1439,52 @@ def _minutes_until(timestamp: str, *, now: datetime | None = None) -> int:
     return int(delta.total_seconds() // 60)
 
 
+def _override_review_status(
+    override: ReleaseOverride,
+    *,
+    override_expiring_soon_minutes: int,
+) -> str:
+    if override.expires_at is None:
+        return "active_no_expiry"
+    minutes_until_expiry = _minutes_until(override.expires_at)
+    if minutes_until_expiry < 0:
+        return "expired"
+    if minutes_until_expiry <= override_expiring_soon_minutes:
+        return "expiring_soon"
+    return "active"
+
+
+def _override_review_rank(risk_level: str) -> int:
+    return {"high": 2, "medium": 1, "low": 0}.get(risk_level, -1)
+
+
+def _override_review_priority(status: str) -> int:
+    return {
+        "expired": 0,
+        "expiring_soon": 1,
+        "active_no_expiry": 2,
+        "active": 3,
+    }.get(status, 4)
+
+
+def _override_review_risk_level(status: str) -> str:
+    if status in {"expired", "expiring_soon"}:
+        return "high"
+    if status == "active_no_expiry":
+        return "medium"
+    return "low"
+
+
+def _override_review_action(status: str) -> str:
+    if status == "expired":
+        return "remove_or_renew_override"
+    if status == "expiring_soon":
+        return "review_override_expiry"
+    if status == "active_no_expiry":
+        return "add_override_expiry"
+    return "observe_override"
+
+
 def _active_override_map(record: ReleaseRecord, environment: str) -> dict[str, ReleaseOverride]:
     overrides: dict[str, ReleaseOverride] = {}
     for override in record.overrides:
@@ -1712,6 +1844,23 @@ def get_release_risk_board(
         required_approver_roles=list(required_approver_roles or []),
         environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
+        override_expiring_soon_minutes=override_expiring_soon_minutes,
+        limit=limit,
+    )
+
+
+def get_override_review_board(
+    *,
+    ledger_path: Path,
+    release_name: str | None = None,
+    environment: str | None = None,
+    override_expiring_soon_minutes: int = 120,
+    limit: int = 50,
+) -> OverrideReviewBoard:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.override_review_board(
+        release_name=release_name,
+        environment=environment,
         override_expiring_soon_minutes=override_expiring_soon_minutes,
         limit=limit,
     )
