@@ -145,7 +145,7 @@ Default rollout environments come from `AGENT_ARCHITECT_LAB_ENVIRONMENTS`, which
 Environment freeze windows come from `AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS`, which accepts a JSON object such as `{"staging":["00:00-06:00"],"production":["22:00-23:59","00:00-01:00"]}`.
 An active freeze window adds the `environment_frozen` blocker to deploy readiness results. Windows support same-day ranges and cross-midnight ranges.
 Use `deploy-policy --environment <name>` to inspect the currently enforced deploy policy and the active release head for an environment.
-Use `rollout-matrix [release_name]` to get a multi-environment operator view. When a release name is supplied, the matrix includes readiness per environment and returns a non-zero exit code when any environment is blocked.
+Use `rollout-matrix [release_name]` to get a multi-environment operator view. When a release name is supplied, the matrix includes readiness plus a per-environment `recommended_action`, and returns a non-zero exit code when any environment is blocked.
 
 ## Planner Providers
 

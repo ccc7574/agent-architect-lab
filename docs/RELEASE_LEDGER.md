@@ -142,6 +142,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environme
 ```
 
 The default environment list used by `rollout-matrix` comes from `AGENT_ARCHITECT_LAB_ENVIRONMENTS` and defaults to `staging,production`.
+When a release name is supplied, each matrix row also includes a `recommended_action` such as `deploy`, `collect_required_approvals`, `wait_for_staging_soak`, or `wait_for_freeze_window`.
 
 ## Why This Matters
 

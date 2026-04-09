@@ -932,9 +932,11 @@ def test_get_rollout_matrix_reports_policy_and_release_readiness(tmp_path: Path)
     assert matrix.rows[0].readiness is not None
     assert matrix.rows[0].readiness.passed is False
     assert "already_active_in_environment" in matrix.rows[0].readiness.blockers
+    assert matrix.rows[0].recommended_action == "no_action_already_active"
     assert matrix.rows[1].policy.required_predecessor_environment == "staging"
     assert matrix.rows[1].readiness is not None
     assert "environment_frozen" in matrix.rows[1].readiness.blockers
+    assert matrix.rows[1].recommended_action == "collect_required_approvals"
 
 
 def test_get_rollout_matrix_without_release_only_reports_environment_views(tmp_path: Path) -> None:
@@ -965,4 +967,5 @@ def test_get_rollout_matrix_without_release_only_reports_environment_views(tmp_p
     assert matrix.all_ready is None
     assert matrix.rows[0].policy.active_release == "release-head"
     assert matrix.rows[0].readiness is None
+    assert matrix.rows[0].recommended_action == "observe_environment"
     assert matrix.rows[1].policy.freeze_windows == ["23:00-23:59"]

@@ -316,7 +316,9 @@ def test_cmd_rollout_matrix_reports_release_readiness(monkeypatch, tmp_path: Pat
     assert payload["all_ready"] is False
     assert payload["rows"][0]["environment"] == "staging"
     assert payload["rows"][0]["readiness"]["blockers"] == ["already_active_in_environment"]
+    assert payload["rows"][0]["recommended_action"] == "no_action_already_active"
     assert "environment_frozen" in payload["rows"][1]["readiness"]["blockers"]
+    assert payload["rows"][1]["recommended_action"] == "collect_required_approvals"
 
 
 def test_cmd_rollout_matrix_respects_explicit_environment_override(monkeypatch, tmp_path: Path) -> None:
@@ -335,3 +337,4 @@ def test_cmd_rollout_matrix_respects_explicit_environment_override(monkeypatch, 
     assert payload["release_name"] is None
     assert payload["environments"] == ["canary"]
     assert payload["rows"][0]["environment"] == "canary"
+    assert payload["rows"][0]["recommended_action"] == "observe_environment"

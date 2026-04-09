@@ -385,12 +385,14 @@ class RolloutMatrixRow:
     environment: str
     policy: DeployPolicy
     readiness: DeployReadiness | None = None
+    recommended_action: str = "observe_environment"
 
     def to_dict(self) -> dict:
         return {
             "environment": self.environment,
             "policy": self.policy.to_dict(),
             "readiness": self.readiness.to_dict() if self.readiness is not None else None,
+            "recommended_action": self.recommended_action,
         }
 
 
@@ -545,6 +547,7 @@ class ReleaseLedger:
                     environment=environment,
                     policy=policy,
                     readiness=readiness,
+                    recommended_action=_recommended_rollout_action(readiness),
                 )
             )
         all_ready = None if release_name is None else all(
@@ -908,6 +911,27 @@ def _latest_timestamp(*timestamps: str | None) -> str:
         present,
         key=lambda item: datetime.fromisoformat(item.replace("Z", "+00:00")),
     )
+
+
+def _recommended_rollout_action(readiness: DeployReadiness | None) -> str:
+    if readiness is None:
+        return "observe_environment"
+    if readiness.passed:
+        return "deploy"
+    blockers = set(readiness.blockers)
+    if blockers == {"already_active_in_environment"}:
+        return "no_action_already_active"
+    if "release_not_approved" in blockers:
+        return "approve_release"
+    if any(blocker.startswith("missing_required_approvals:") for blocker in blockers):
+        return "collect_required_approvals"
+    if "missing_active_staging_deployment" in blockers:
+        return "deploy_to_staging_first"
+    if "staging_soak_incomplete" in blockers:
+        return "wait_for_staging_soak"
+    if "environment_frozen" in blockers:
+        return "wait_for_freeze_window"
+    return "resolve_blockers"
 
 
 def build_release_manifest(review: ReleaseShadowReview, release_name: str, report_prefix: str) -> ReleaseManifest:
