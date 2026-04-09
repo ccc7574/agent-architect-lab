@@ -127,6 +127,37 @@ class ReleaseApproval:
 
 
 @dataclass(slots=True)
+class ReleaseOverride:
+    environment: str
+    blocker: str
+    actor: str
+    created_at: str
+    note: str = ""
+    expires_at: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "blocker": self.blocker,
+            "actor": self.actor,
+            "created_at": self.created_at,
+            "note": self.note,
+            "expires_at": self.expires_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ReleaseOverride":
+        return cls(
+            environment=payload["environment"],
+            blocker=payload["blocker"],
+            actor=payload["actor"],
+            created_at=payload["created_at"],
+            note=payload.get("note", ""),
+            expires_at=payload.get("expires_at"),
+        )
+
+
+@dataclass(slots=True)
 class ReleaseSuiteSnapshot:
     suite_name: str
     baseline_report_path: str
@@ -229,6 +260,7 @@ class ReleaseRecord:
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     approvals: list[ReleaseApproval] = field(default_factory=list)
+    overrides: list[ReleaseOverride] = field(default_factory=list)
     deployments: list[ReleaseDeployment] = field(default_factory=list)
     events: list[ReleaseEvent] = field(default_factory=list)
 
@@ -245,6 +277,7 @@ class ReleaseRecord:
             "blockers": self.blockers,
             "warnings": self.warnings,
             "approvals": [approval.to_dict() for approval in self.approvals],
+            "overrides": [override.to_dict() for override in self.overrides],
             "deployments": [deployment.to_dict() for deployment in self.deployments],
             "events": [event.to_dict() for event in self.events],
         }
@@ -263,6 +296,7 @@ class ReleaseRecord:
             blockers=list(payload.get("blockers", [])),
             warnings=list(payload.get("warnings", [])),
             approvals=[ReleaseApproval.from_dict(item) for item in payload.get("approvals", [])],
+            overrides=[ReleaseOverride.from_dict(item) for item in payload.get("overrides", [])],
             deployments=[ReleaseDeployment.from_dict(item) for item in payload.get("deployments", [])],
             events=[ReleaseEvent.from_dict(item) for item in payload.get("events", [])],
         )
@@ -632,6 +666,12 @@ class ReleaseLedger:
         if current_head is not None and current_head[0].release_name == release_name:
             blockers.append("already_active_in_environment")
 
+        active_overrides = _active_override_map(record, environment)
+        if active_overrides:
+            blockers = [blocker for blocker in blockers if blocker not in active_overrides]
+            for blocker, override in sorted(active_overrides.items()):
+                evidence.append(f"override_applied:{blocker}:{override.actor}")
+
         return DeployReadiness(
             release_name=release_name,
             environment=environment,
@@ -722,6 +762,43 @@ class ReleaseLedger:
                 from_state=previous_state,
                 to_state=record.state,
                 note=note or f"approval_role:{role}",
+            )
+        )
+        return record
+
+    def grant_override(
+        self,
+        release_name: str,
+        environment: str,
+        blocker: str,
+        actor: str,
+        note: str = "",
+        *,
+        expires_at: str | None = None,
+    ) -> ReleaseRecord:
+        record = self.get(release_name)
+        if blocker in {"already_active_in_environment", "release_not_approved"}:
+            raise ValueError(f"Blocker '{blocker}' cannot be overridden.")
+        timestamp = utc_now_iso()
+        record.overrides.append(
+            ReleaseOverride(
+                environment=environment,
+                blocker=blocker,
+                actor=actor,
+                created_at=timestamp,
+                note=note,
+                expires_at=expires_at,
+            )
+        )
+        record.last_updated_at = timestamp
+        record.events.append(
+            ReleaseEvent(
+                timestamp=timestamp,
+                action=f"override:{environment}",
+                actor=actor,
+                from_state=record.state,
+                to_state=record.state,
+                note=f"{blocker}{f' expires_at:{expires_at}' if expires_at else ''}",
             )
         )
         return record
@@ -1004,6 +1081,29 @@ def _predecessor_soak_blocker(environment: str) -> str:
     return f"predecessor_soak_incomplete:{environment}"
 
 
+def _override_is_active(override: ReleaseOverride, *, now: datetime | None = None) -> bool:
+    if override.expires_at is None:
+        return True
+    current_time = now or datetime.now(UTC)
+    expiry = datetime.fromisoformat(override.expires_at)
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=UTC)
+    return current_time <= expiry
+
+
+def _active_override_map(record: ReleaseRecord, environment: str) -> dict[str, ReleaseOverride]:
+    overrides: dict[str, ReleaseOverride] = {}
+    for override in record.overrides:
+        if override.environment != environment:
+            continue
+        if not _override_is_active(override):
+            continue
+        overrides[override.blocker] = override
+    return overrides
+
+
 def _latest_timestamp(*timestamps: str | None) -> str:
     present = [timestamp for timestamp in timestamps if timestamp]
     if not present:
@@ -1112,6 +1212,29 @@ def transition_release(
         record = ledger.approve(release_name, actor, role or actor, note)
     else:
         record = ledger.transition(release_name, action, actor, note)
+    ledger.save(ledger_path)
+    return record
+
+
+def grant_release_override(
+    release_name: str,
+    *,
+    environment: str,
+    blocker: str,
+    actor: str,
+    note: str = "",
+    expires_at: str | None = None,
+    ledger_path: Path,
+) -> ReleaseRecord:
+    ledger = ReleaseLedger.load(ledger_path)
+    record = ledger.grant_override(
+        release_name,
+        environment,
+        blocker,
+        actor,
+        note,
+        expires_at=expires_at,
+    )
     ledger.save(ledger_path)
     return record
 

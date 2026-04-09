@@ -20,6 +20,7 @@ from agent_architect_lab.harness.ledger import (
     get_environment_status,
     get_deploy_policy,
     get_release_record,
+    grant_release_override,
     list_releases,
     record_release_candidate,
     rollback_release,
@@ -124,6 +125,14 @@ def build_parser() -> argparse.ArgumentParser:
     approve_release.add_argument("--by", required=True, help="Approver identity.")
     approve_release.add_argument("--role", default="", help="Optional approver role for production readiness policy. Defaults to the actor name.")
     approve_release.add_argument("--note", default="", help="Optional approval note.")
+
+    override_release = subparsers.add_parser("grant-release-override", help="Grant a temporary blocker override for a release in a specific environment.")
+    override_release.add_argument("release_name", help="Immutable release name.")
+    override_release.add_argument("--environment", required=True, help="Deployment environment where the override applies.")
+    override_release.add_argument("--blocker", required=True, help="Exact blocker string to override, for example environment_frozen.")
+    override_release.add_argument("--by", required=True, help="Operator identity.")
+    override_release.add_argument("--note", default="", help="Optional override justification.")
+    override_release.add_argument("--expires-at", default="", help="Optional absolute expiry timestamp in ISO-8601 format.")
 
     reject_release = subparsers.add_parser("reject-release", help="Reject a pending or approved release in the release ledger.")
     reject_release.add_argument("release_name", help="Immutable release name.")
@@ -416,6 +425,28 @@ def cmd_approve_release(release_name: str, actor: str, role: str, note: str) -> 
     return 0
 
 
+def cmd_grant_release_override(
+    release_name: str,
+    environment: str,
+    blocker: str,
+    actor: str,
+    note: str,
+    expires_at: str,
+) -> int:
+    settings = load_settings()
+    record = grant_release_override(
+        release_name,
+        environment=environment,
+        blocker=blocker,
+        actor=actor,
+        note=note,
+        expires_at=expires_at or None,
+        ledger_path=settings.release_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
 def cmd_reject_release(release_name: str, actor: str, note: str) -> int:
     settings = load_settings()
     record = transition_release(
@@ -603,6 +634,15 @@ def main() -> int:
         return cmd_release_status(args.release_name)
     if args.command == "approve-release":
         return cmd_approve_release(args.release_name, args.by, args.role, args.note)
+    if args.command == "grant-release-override":
+        return cmd_grant_release_override(
+            args.release_name,
+            args.environment,
+            args.blocker,
+            args.by,
+            args.note,
+            args.expires_at,
+        )
     if args.command == "reject-release":
         return cmd_reject_release(args.release_name, args.by, args.note)
     if args.command == "promote-release":

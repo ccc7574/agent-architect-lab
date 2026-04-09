@@ -47,6 +47,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites sa
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --report-prefix release-candidate --suite-aware-defaults --release-name 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli approve-release 2026-04-10-main --by qa-owner --role qa-owner --note "gate review complete"
 PYTHONPATH=src python3 -m agent_architect_lab.cli approve-release 2026-04-10-main --by release-manager --role release-manager --note "ops sign-off complete"
+PYTHONPATH=src python3 -m agent_architect_lab.cli grant-release-override 2026-04-10-main --environment production --blocker environment_frozen --by incident-commander --note "emergency hotfix waiver"
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main --environment staging --by release-manager --note "staging rollout"
 PYTHONPATH=src python3 -m agent_architect_lab.cli check-deploy-readiness 2026-04-10-main --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment production
@@ -147,6 +148,7 @@ Environment freeze windows come from `AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WIN
 An active freeze window adds the `environment_frozen` blocker to deploy readiness results. Windows support same-day ranges and cross-midnight ranges.
 Use `deploy-policy --environment <name>` to inspect the currently enforced deploy policy and the active release head for an environment.
 Use `rollout-matrix [release_name]` to get a multi-environment operator view. When a release name is supplied, the matrix includes readiness plus a per-environment `recommended_action`, and returns a non-zero exit code when any environment is blocked.
+Use `grant-release-override` to waive a specific deploy blocker for one release and one environment. Overrides are recorded in the release ledger and can include an optional `--expires-at` ISO timestamp.
 
 ## Planner Providers
 

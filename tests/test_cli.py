@@ -13,6 +13,7 @@ from agent_architect_lab.cli import (
     cmd_deploy_release,
     cmd_environment_status,
     cmd_explain_patterns,
+    cmd_grant_release_override,
     cmd_list_skills,
     cmd_list_releases,
     cmd_promote_release,
@@ -361,3 +362,43 @@ def test_cmd_rollout_matrix_includes_policy_defined_environments(monkeypatch, tm
     assert payload["rows"][2]["environment"] == "canary"
     assert payload["rows"][2]["policy"]["required_predecessor_environment"] == "staging"
     assert payload["rows"][2]["policy"]["required_approver_roles"] == ["qa-owner"]
+
+
+def test_cmd_grant_release_override_unblocks_readiness(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"staging":["00:00-23:59"]}')
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+
+    blocked_buffer = io.StringIO()
+    with redirect_stdout(blocked_buffer):
+        blocked_exit = cmd_check_deploy_readiness("release-a", "staging")
+    blocked_payload = json.loads(blocked_buffer.getvalue())
+
+    override_buffer = io.StringIO()
+    with redirect_stdout(override_buffer):
+        override_exit = cmd_grant_release_override(
+            "release-a",
+            "staging",
+            "environment_frozen",
+            "incident-commander",
+            "hotfix waiver",
+            "",
+        )
+    override_payload = json.loads(override_buffer.getvalue())
+
+    waived_buffer = io.StringIO()
+    with redirect_stdout(waived_buffer):
+        waived_exit = cmd_check_deploy_readiness("release-a", "staging")
+    waived_payload = json.loads(waived_buffer.getvalue())
+
+    assert blocked_exit == 1
+    assert blocked_payload["blockers"] == ["environment_frozen"]
+    assert override_exit == 0
+    assert override_payload["overrides"][0]["blocker"] == "environment_frozen"
+    assert waived_exit == 0
+    assert waived_payload["blockers"] == []
+    assert "override_applied:environment_frozen:incident-commander" in waived_payload["evidence"]

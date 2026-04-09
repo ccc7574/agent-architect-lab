@@ -15,6 +15,7 @@ from agent_architect_lab.harness.ledger import (
     ReleaseLedger,
     build_release_manifest,
     deploy_release,
+    grant_release_override,
     get_environment_status,
     list_releases,
     record_release_candidate,
@@ -1040,3 +1041,81 @@ def test_environment_specific_policies_extend_readiness_chain(tmp_path: Path) ->
     assert "missing_required_approvals:ops-oncall" in production_readiness.blockers
     assert "environment_frozen" in production_readiness.blockers
     assert "predecessor_soak_incomplete:canary" in production_readiness.blockers
+
+
+def test_release_override_can_waive_specific_blocker(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-override", report_prefix="override", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-override", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+
+    blocked = check_deploy_readiness(
+        "release-override",
+        environment="staging",
+        ledger_path=ledger_path,
+        environment_freeze_windows={"staging": ["00:00-23:59"]},
+    )
+    assert blocked.passed is False
+    assert blocked.blockers == ["environment_frozen"]
+
+    grant_release_override(
+        "release-override",
+        environment="staging",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="hotfix waiver",
+        ledger_path=ledger_path,
+    )
+
+    waived = check_deploy_readiness(
+        "release-override",
+        environment="staging",
+        ledger_path=ledger_path,
+        environment_freeze_windows={"staging": ["00:00-23:59"]},
+    )
+
+    assert waived.passed is True
+    assert waived.blockers == []
+    assert "override_applied:environment_frozen:incident-commander" in waived.evidence
+
+
+def test_release_override_rejects_non_overridable_blocker(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-no-override", report_prefix="override", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+
+    try:
+        grant_release_override(
+            "release-no-override",
+            environment="staging",
+            blocker="release_not_approved",
+            actor="incident-commander",
+            note="should fail",
+            ledger_path=ledger_path,
+        )
+    except ValueError as exc:
+        assert "cannot be overridden" in str(exc)
+    else:
+        raise AssertionError("Expected non-overridable blocker to raise ValueError.")
