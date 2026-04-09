@@ -118,6 +118,12 @@ Inspect the active deployment policy for an environment:
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment production
 ```
 
+Inspect a full rollout matrix across the configured environment set:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
+```
+
 Inspect current state and event history:
 
 ```bash
@@ -128,11 +134,14 @@ Operator-oriented summary commands:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
+PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment production
 ```
+
+The default environment list used by `rollout-matrix` comes from `AGENT_ARCHITECT_LAB_ENVIRONMENTS` and defaults to `staging,production`.
 
 ## Why This Matters
 

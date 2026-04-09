@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_list_releases,
     cmd_promote_release,
     cmd_register_report,
+    cmd_rollout_matrix,
     cmd_rollback_release,
     cmd_release_status,
     cmd_run_evals,
@@ -292,3 +293,45 @@ def test_cmd_environment_history_reports_recent_lineage(monkeypatch, tmp_path: P
     assert payload[0]["status"] == "active"
     assert payload[1]["release_name"] == "release-b"
     assert payload[1]["status"] == "rolled_back"
+
+
+def test_cmd_rollout_matrix_reports_release_readiness(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"production":["00:00-23:59"]}')
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy staging")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_rollout_matrix("release-a", [])
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 1
+    assert payload["release_name"] == "release-a"
+    assert payload["all_ready"] is False
+    assert payload["rows"][0]["environment"] == "staging"
+    assert payload["rows"][0]["readiness"]["blockers"] == ["already_active_in_environment"]
+    assert "environment_frozen" in payload["rows"][1]["readiness"]["blockers"]
+
+
+def test_cmd_rollout_matrix_respects_explicit_environment_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENTS", "staging,production,canary")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_rollout_matrix("", ["canary"])
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["release_name"] is None
+    assert payload["environments"] == ["canary"]
+    assert payload["rows"][0]["environment"] == "canary"

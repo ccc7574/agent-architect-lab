@@ -29,6 +29,7 @@ class Settings:
     planner_max_retries: int
     production_soak_minutes: int
     production_required_approver_roles: list[str]
+    environment_names: list[str]
     environment_freeze_windows: dict[str, list[str]]
 
 
@@ -67,6 +68,14 @@ def load_settings() -> Settings:
             "qa-owner,release-manager",
         ).split(",")
         if role.strip()
+    ]
+    environment_names = [
+        environment.strip()
+        for environment in os.environ.get(
+            "AGENT_ARCHITECT_LAB_ENVIRONMENTS",
+            "staging,production",
+        ).split(",")
+        if environment.strip()
     ]
     environment_freeze_windows = {
         str(environment): [str(window) for window in windows]
@@ -108,5 +117,6 @@ def load_settings() -> Settings:
         planner_max_retries=planner_max_retries,
         production_soak_minutes=production_soak_minutes,
         production_required_approver_roles=production_required_approver_roles,
+        environment_names=environment_names,
         environment_freeze_windows=environment_freeze_windows,
     )

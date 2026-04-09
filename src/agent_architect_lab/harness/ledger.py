@@ -381,6 +381,36 @@ class EnvironmentHistoryEntry:
 
 
 @dataclass(slots=True)
+class RolloutMatrixRow:
+    environment: str
+    policy: DeployPolicy
+    readiness: DeployReadiness | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "policy": self.policy.to_dict(),
+            "readiness": self.readiness.to_dict() if self.readiness is not None else None,
+        }
+
+
+@dataclass(slots=True)
+class RolloutMatrix:
+    environments: list[str]
+    release_name: str | None = None
+    all_ready: bool | None = None
+    rows: list[RolloutMatrixRow] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "environments": self.environments,
+            "release_name": self.release_name,
+            "all_ready": self.all_ready,
+            "rows": [row.to_dict() for row in self.rows],
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -481,6 +511,51 @@ class ReleaseLedger:
                 )
         entries.sort(key=lambda item: item.last_transition_at, reverse=True)
         return entries[:limit]
+
+    def rollout_matrix(
+        self,
+        environments: list[str],
+        *,
+        release_name: str | None,
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+        environment_freeze_windows: dict[str, list[str]],
+    ) -> RolloutMatrix:
+        if release_name is not None:
+            self.get(release_name)
+        rows: list[RolloutMatrixRow] = []
+        for environment in environments:
+            policy = self.deploy_policy(
+                environment,
+                production_soak_minutes=production_soak_minutes,
+                required_approver_roles=required_approver_roles,
+                environment_freeze_windows=environment_freeze_windows,
+            )
+            readiness = None
+            if release_name is not None:
+                readiness = self.deploy_readiness(
+                    release_name,
+                    environment,
+                    production_soak_minutes=production_soak_minutes,
+                    required_approver_roles=required_approver_roles,
+                    environment_freeze_windows=environment_freeze_windows,
+                )
+            rows.append(
+                RolloutMatrixRow(
+                    environment=environment,
+                    policy=policy,
+                    readiness=readiness,
+                )
+            )
+        all_ready = None if release_name is None else all(
+            row.readiness is not None and row.readiness.passed for row in rows
+        )
+        return RolloutMatrix(
+            environments=list(environments),
+            release_name=release_name,
+            all_ready=all_ready,
+            rows=rows,
+        )
 
     def deploy_readiness(
         self,
@@ -981,6 +1056,25 @@ def get_environment_history(
 ) -> list[EnvironmentHistoryEntry]:
     ledger = ReleaseLedger.load(ledger_path)
     return ledger.environment_history(environment, limit=limit)
+
+
+def get_rollout_matrix(
+    environments: list[str],
+    *,
+    ledger_path: Path,
+    release_name: str | None = None,
+    production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
+) -> RolloutMatrix:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.rollout_matrix(
+        list(environments),
+        release_name=release_name,
+        production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
+    )
 
 
 def rollback_release(

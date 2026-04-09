@@ -16,6 +16,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     deploy_release,
     get_environment_history,
+    get_rollout_matrix,
     get_environment_status,
     get_deploy_policy,
     get_release_record,
@@ -161,6 +162,10 @@ def build_parser() -> argparse.ArgumentParser:
     environment_history_cmd = subparsers.add_parser("environment-history", help="Show recent deployment lineage for an environment.")
     environment_history_cmd.add_argument("--environment", required=True, help="Deployment environment to inspect.")
     environment_history_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of deployment entries to return.")
+
+    rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
+    rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
+    rollout_matrix_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
     return parser
 
 
@@ -487,6 +492,22 @@ def cmd_environment_history(environment: str, limit: int) -> int:
     return 0
 
 
+def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
+    settings = load_settings()
+    matrix = get_rollout_matrix(
+        environments or settings.environment_names,
+        ledger_path=settings.release_ledger_path,
+        release_name=release_name or None,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_freeze_windows=settings.environment_freeze_windows,
+    )
+    print(json.dumps(matrix.to_dict(), indent=2))
+    if matrix.all_ready is None:
+        return 0
+    return 0 if matrix.all_ready else 1
+
+
 def cmd_check_deploy_readiness(release_name: str, environment: str) -> int:
     settings = load_settings()
     readiness = check_deploy_readiness(
@@ -592,6 +613,8 @@ def main() -> int:
         return cmd_environment_status(args.environment)
     if args.command == "environment-history":
         return cmd_environment_history(args.environment, args.limit)
+    if args.command == "rollout-matrix":
+        return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":
         return cmd_check_deploy_readiness(args.release_name, args.environment)
     if args.command == "deploy-policy":

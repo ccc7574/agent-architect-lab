@@ -11,6 +11,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     get_deploy_policy,
     get_environment_history,
+    get_rollout_matrix,
     ReleaseLedger,
     build_release_manifest,
     deploy_release,
@@ -888,3 +889,80 @@ def test_environment_history_tracks_supersede_and_rollback_lineage(tmp_path: Pat
     assert history[0].reactivated_by == "release-manager"
     assert history[1].status == "rolled_back"
     assert history[1].rolled_back_by == "release-manager"
+
+
+def test_get_rollout_matrix_reports_policy_and_release_readiness(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-matrix", report_prefix="matrix", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-matrix", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release(
+        "release-matrix",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+    )
+
+    matrix = get_rollout_matrix(
+        ["staging", "production"],
+        ledger_path=ledger_path,
+        release_name="release-matrix",
+        production_soak_minutes=30,
+        required_approver_roles=["qa-owner", "release-manager"],
+        environment_freeze_windows={"production": ["00:00-23:59"]},
+    )
+
+    assert matrix.release_name == "release-matrix"
+    assert matrix.all_ready is False
+    assert [row.environment for row in matrix.rows] == ["staging", "production"]
+    assert matrix.rows[0].readiness is not None
+    assert matrix.rows[0].readiness.passed is False
+    assert "already_active_in_environment" in matrix.rows[0].readiness.blockers
+    assert matrix.rows[1].policy.required_predecessor_environment == "staging"
+    assert matrix.rows[1].readiness is not None
+    assert "environment_frozen" in matrix.rows[1].readiness.blockers
+
+
+def test_get_rollout_matrix_without_release_only_reports_environment_views(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-head", report_prefix="head", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-head", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release("release-head", environment="staging", actor="release-manager", note="deploy", ledger_path=ledger_path)
+
+    matrix = get_rollout_matrix(
+        ["staging", "production"],
+        ledger_path=ledger_path,
+        environment_freeze_windows={"production": ["23:00-23:59"]},
+    )
+
+    assert matrix.release_name is None
+    assert matrix.all_ready is None
+    assert matrix.rows[0].policy.active_release == "release-head"
+    assert matrix.rows[0].readiness is None
+    assert matrix.rows[1].policy.freeze_windows == ["23:00-23:59"]

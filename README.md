@@ -54,6 +54,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollback-release 2026-04-10-main --environment production --by release-manager --note "rollback due to incident"
 PYTHONPATH=src python3 -m agent_architect_lab.cli promote-release 2026-04-10-main --by release-manager --note "production rollout started"
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
+PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
@@ -140,9 +141,11 @@ That split makes it possible to audit what was reviewed versus what was later ap
 
 Production deploy readiness also respects `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES`, which defaults to `30`.
 Required production sign-off roles come from `AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES`, which defaults to `qa-owner,release-manager`.
+Default rollout environments come from `AGENT_ARCHITECT_LAB_ENVIRONMENTS`, which defaults to `staging,production`.
 Environment freeze windows come from `AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS`, which accepts a JSON object such as `{"staging":["00:00-06:00"],"production":["22:00-23:59","00:00-01:00"]}`.
 An active freeze window adds the `environment_frozen` blocker to deploy readiness results. Windows support same-day ranges and cross-midnight ranges.
 Use `deploy-policy --environment <name>` to inspect the currently enforced deploy policy and the active release head for an environment.
+Use `rollout-matrix [release_name]` to get a multi-environment operator view. When a release name is supplied, the matrix includes readiness per environment and returns a non-zero exit code when any environment is blocked.
 
 ## Planner Providers
 
