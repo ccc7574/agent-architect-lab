@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agent_architect_lab.cli import (
     cmd_approve_release,
+    cmd_check_deploy_readiness,
     cmd_deploy_release,
     cmd_environment_status,
     cmd_explain_patterns,
@@ -197,3 +198,22 @@ def test_cmd_list_releases_and_environment_status(monkeypatch, tmp_path: Path) -
     assert releases_payload[0]["release_name"] == "release-b"
     assert env_exit == 0
     assert env_payload["active_release"] == "release-b"
+
+
+def test_cmd_check_deploy_readiness_reports_blockers(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "30")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_check_deploy_readiness("release-a", "production")
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 1
+    assert "staging_soak_incomplete" in payload["blockers"]

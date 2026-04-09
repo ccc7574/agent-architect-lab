@@ -30,8 +30,11 @@ The ledger also tracks environment rollout lineage:
 
 - a release must be `approved` before deployment
 - `production` deployment requires the same release to be active in `staging`
+- `production` deployment also requires the `staging` rollout to satisfy the configured soak time
 - deploying a new release into an environment supersedes the previous active release
 - rolling back the active release reactivates the superseded release when lineage is available
+
+The soak threshold is controlled by `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES` and defaults to `30`.
 
 ## Commands
 
@@ -79,6 +82,14 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli rollback-release \
   --environment production \
   --by release-manager \
   --note "rollback due to incident"
+```
+
+Check deploy readiness before attempting a production push:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli check-deploy-readiness \
+  2026-04-10-main \
+  --environment production
 ```
 
 Inspect current state and event history:

@@ -13,6 +13,7 @@ from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import save_incident_suggestions, suggest_incident_evals
 from agent_architect_lab.harness.ledger import (
+    check_deploy_readiness,
     deploy_release,
     get_environment_status,
     get_release_record,
@@ -141,6 +142,10 @@ def build_parser() -> argparse.ArgumentParser:
     rollback_release_cmd.add_argument("--environment", required=True, help="Deployment environment to roll back.")
     rollback_release_cmd.add_argument("--by", required=True, help="Operator identity.")
     rollback_release_cmd.add_argument("--note", default="", help="Optional rollback note.")
+
+    readiness_cmd = subparsers.add_parser("check-deploy-readiness", help="Explain whether a release can deploy to an environment under current policy.")
+    readiness_cmd.add_argument("release_name", help="Immutable release name.")
+    readiness_cmd.add_argument("--environment", required=True, help="Deployment environment to evaluate.")
 
     list_releases_cmd = subparsers.add_parser("list-releases", help="List recorded releases in reverse chronological order.")
 
@@ -429,6 +434,7 @@ def cmd_deploy_release(release_name: str, environment: str, actor: str, note: st
         actor=actor,
         note=note,
         ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
     )
     print(json.dumps(record.to_dict(), indent=2))
     return 0
@@ -459,6 +465,18 @@ def cmd_environment_status(environment: str) -> int:
     status = get_environment_status(environment, ledger_path=settings.release_ledger_path)
     print(json.dumps(status.to_dict(), indent=2))
     return 0
+
+
+def cmd_check_deploy_readiness(release_name: str, environment: str) -> int:
+    settings = load_settings()
+    readiness = check_deploy_readiness(
+        release_name,
+        environment=environment,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+    )
+    print(json.dumps(readiness.to_dict(), indent=2))
+    return 0 if readiness.passed else 1
 
 
 def main() -> int:
@@ -537,6 +555,8 @@ def main() -> int:
         return cmd_list_releases()
     if args.command == "environment-status":
         return cmd_environment_status(args.environment)
+    if args.command == "check-deploy-readiness":
+        return cmd_check_deploy_readiness(args.release_name, args.environment)
     parser.error("Unknown command")
     return 1
 

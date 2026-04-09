@@ -47,6 +47,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites sa
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --report-prefix release-candidate --suite-aware-defaults --release-name 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli approve-release 2026-04-10-main --by qa-owner --note "gate review complete"
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main --environment staging --by release-manager --note "staging rollout"
+PYTHONPATH=src python3 -m agent_architect_lab.cli check-deploy-readiness 2026-04-10-main --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main --environment production --by release-manager --note "production rollout"
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollback-release 2026-04-10-main --environment production --by release-manager --note "rollback due to incident"
 PYTHONPATH=src python3 -m agent_architect_lab.cli promote-release 2026-04-10-main --by release-manager --note "production rollout started"
@@ -133,6 +134,8 @@ Recorded releases are stored separately under `artifacts/releases`:
 - mutable operator state in `release-ledger.json`
 
 That split makes it possible to audit what was reviewed versus what was later approved or promoted.
+
+Production deploy readiness also respects `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES`, which defaults to `30`.
 
 ## Planner Providers
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -258,6 +259,32 @@ class EnvironmentStatus:
 
 
 @dataclass(slots=True)
+class DeployReadiness:
+    release_name: str
+    environment: str
+    passed: bool
+    blockers: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+    required_state: str = "approved"
+    required_predecessor_environment: str | None = None
+    soak_minutes_required: int = 0
+    soak_minutes_observed: int | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "release_name": self.release_name,
+            "environment": self.environment,
+            "passed": self.passed,
+            "blockers": self.blockers,
+            "evidence": self.evidence,
+            "required_state": self.required_state,
+            "required_predecessor_environment": self.required_predecessor_environment,
+            "soak_minutes_required": self.soak_minutes_required,
+            "soak_minutes_observed": self.soak_minutes_observed,
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -301,6 +328,45 @@ class ReleaseLedger:
             deployed_at=deployment.deployed_at,
             deployed_by=deployment.deployed_by,
             status=deployment.status,
+        )
+
+    def deploy_readiness(self, release_name: str, environment: str, *, production_soak_minutes: int) -> DeployReadiness:
+        record = self.get(release_name)
+        blockers: list[str] = []
+        evidence: list[str] = [f"release_state:{record.state}"]
+        predecessor_environment = "staging" if environment == "production" else None
+        soak_minutes_observed: int | None = None
+
+        if record.state not in {"approved", "promoted"}:
+            blockers.append("release_not_approved")
+
+        if environment == "production":
+            staging_deployment = _find_active_deployment(record, "staging")
+            if staging_deployment is None:
+                blockers.append("missing_active_staging_deployment")
+            else:
+                evidence.append(f"staging_deployed_at:{staging_deployment.deployed_at}")
+                soak_minutes_observed = _minutes_since(staging_deployment.deployed_at)
+                if soak_minutes_observed < production_soak_minutes:
+                    blockers.append("staging_soak_incomplete")
+                    evidence.append(
+                        f"staging_soak_minutes:{soak_minutes_observed}/{production_soak_minutes}"
+                    )
+
+        current_head = _current_environment_head(self.records, environment)
+        if current_head is not None and current_head[0].release_name == release_name:
+            blockers.append("already_active_in_environment")
+
+        return DeployReadiness(
+            release_name=release_name,
+            environment=environment,
+            passed=not blockers,
+            blockers=blockers,
+            evidence=evidence,
+            required_state="approved",
+            required_predecessor_environment=predecessor_environment,
+            soak_minutes_required=production_soak_minutes if environment == "production" else 0,
+            soak_minutes_observed=soak_minutes_observed,
         )
 
     def create(self, manifest: ReleaseManifest, manifest_path: Path) -> ReleaseRecord:
@@ -352,9 +418,26 @@ class ReleaseLedger:
         record.last_updated_at = timestamp
         return record
 
-    def deploy(self, release_name: str, environment: str, actor: str, note: str = "") -> ReleaseRecord:
+    def deploy(
+        self,
+        release_name: str,
+        environment: str,
+        actor: str,
+        note: str = "",
+        *,
+        production_soak_minutes: int,
+    ) -> ReleaseRecord:
         record = self.get(release_name)
-        _validate_deploy_transition(record, environment)
+        readiness = self.deploy_readiness(
+            release_name,
+            environment,
+            production_soak_minutes=production_soak_minutes,
+        )
+        if not readiness.passed:
+            raise ValueError(
+                f"Release '{release_name}' is not deploy-ready for environment '{environment}': "
+                + ", ".join(readiness.blockers)
+            )
         timestamp = utc_now_iso()
         current_head = _current_environment_head(self.records, environment)
         if current_head is not None and current_head[0].release_name == release_name:
@@ -466,13 +549,6 @@ def _next_state(current_state: str, action: str) -> str:
     return next_state
 
 
-def _validate_deploy_transition(record: ReleaseRecord, environment: str) -> None:
-    if record.state not in {"approved", "promoted"}:
-        raise ValueError(f"Release '{record.release_name}' must be approved before deployment.")
-    if environment == "production" and _find_active_deployment(record, "staging") is None:
-        raise ValueError(f"Release '{record.release_name}' must be active in 'staging' before production deployment.")
-
-
 def _find_latest_deployment(
     record: ReleaseRecord,
     environment: str,
@@ -507,6 +583,19 @@ def _current_environment_head(
     candidates.sort(key=lambda item: item[0], reverse=True)
     _, record, deployment = candidates[0]
     return record, deployment
+
+
+def _minutes_since(timestamp: str, *, now: datetime | None = None) -> int:
+    observed = datetime.fromisoformat(timestamp)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    current_time = now or datetime.now(UTC)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=UTC)
+    delta = current_time - observed
+    if delta < timedelta():
+        return 0
+    return int(delta.total_seconds() // 60)
 
 
 def build_release_manifest(review: ReleaseShadowReview, release_name: str, report_prefix: str) -> ReleaseManifest:
@@ -589,11 +678,33 @@ def deploy_release(
     actor: str,
     note: str = "",
     ledger_path: Path,
+    production_soak_minutes: int = 30,
 ) -> ReleaseRecord:
     ledger = ReleaseLedger.load(ledger_path)
-    record = ledger.deploy(release_name, environment, actor, note)
+    record = ledger.deploy(
+        release_name,
+        environment,
+        actor,
+        note,
+        production_soak_minutes=production_soak_minutes,
+    )
     ledger.save(ledger_path)
     return record
+
+
+def check_deploy_readiness(
+    release_name: str,
+    *,
+    environment: str,
+    ledger_path: Path,
+    production_soak_minutes: int = 30,
+) -> DeployReadiness:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.deploy_readiness(
+        release_name,
+        environment,
+        production_soak_minutes=production_soak_minutes,
+    )
 
 
 def rollback_release(

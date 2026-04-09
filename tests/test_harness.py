@@ -8,6 +8,7 @@ from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
+    check_deploy_readiness,
     ReleaseLedger,
     build_release_manifest,
     deploy_release,
@@ -467,7 +468,7 @@ def test_release_ledger_requires_approval_before_deploy(tmp_path: Path) -> None:
             ledger_path=releases_dir / "release-ledger.json",
         )
     except ValueError as exc:
-        assert "must be approved" in str(exc)
+        assert "release_not_approved" in str(exc)
     else:
         raise AssertionError("Expected deployment without approval to raise ValueError.")
 
@@ -511,6 +512,122 @@ def test_release_ledger_requires_staging_before_production(tmp_path: Path) -> No
         assert "staging" in str(exc)
     else:
         raise AssertionError("Expected production deployment without staging to raise ValueError.")
+
+
+def test_check_deploy_readiness_blocks_production_without_staging(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["retrieval"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"retrieval": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-006b",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-006b", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+
+    readiness = check_deploy_readiness(
+        "release-006b",
+        environment="production",
+        ledger_path=ledger_path,
+        production_soak_minutes=30,
+    )
+
+    assert readiness.passed is False
+    assert "missing_active_staging_deployment" in readiness.blockers
+
+
+def test_check_deploy_readiness_blocks_production_when_staging_soak_is_short(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-soak",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-soak", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release(
+        "release-soak",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=30,
+    )
+
+    readiness = check_deploy_readiness(
+        "release-soak",
+        environment="production",
+        ledger_path=ledger_path,
+        production_soak_minutes=30,
+    )
+
+    assert readiness.passed is False
+    assert "staging_soak_incomplete" in readiness.blockers
+    assert readiness.soak_minutes_required == 30
+
+
+def test_check_deploy_readiness_passes_when_staging_soak_requirement_is_met(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-ready",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-ready", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release(
+        "release-ready",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+    )
+
+    readiness = check_deploy_readiness(
+        "release-ready",
+        environment="production",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+    )
+
+    assert readiness.passed is True
+    assert readiness.blockers == []
 
 
 def test_release_ledger_can_roll_back_and_reactivate_prior_release(tmp_path: Path) -> None:
