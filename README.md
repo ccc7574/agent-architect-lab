@@ -138,6 +138,8 @@ That split makes it possible to audit what was reviewed versus what was later ap
 
 Production deploy readiness also respects `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES`, which defaults to `30`.
 Required production sign-off roles come from `AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES`, which defaults to `qa-owner,release-manager`.
+Environment freeze windows come from `AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS`, which accepts a JSON object such as `{"staging":["00:00-06:00"],"production":["22:00-23:59","00:00-01:00"]}`.
+An active freeze window adds the `environment_frozen` blocker to deploy readiness results. Windows support same-day ranges and cross-midnight ranges.
 
 ## Planner Providers
 

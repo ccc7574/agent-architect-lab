@@ -297,6 +297,7 @@ class DeployReadiness:
     required_predecessor_environment: str | None = None
     soak_minutes_required: int = 0
     soak_minutes_observed: int | None = None
+    active_freeze_window: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -309,6 +310,7 @@ class DeployReadiness:
             "required_predecessor_environment": self.required_predecessor_environment,
             "soak_minutes_required": self.soak_minutes_required,
             "soak_minutes_observed": self.soak_minutes_observed,
+            "active_freeze_window": self.active_freeze_window,
         }
 
 
@@ -365,6 +367,7 @@ class ReleaseLedger:
         *,
         production_soak_minutes: int,
         required_approver_roles: list[str],
+        environment_freeze_windows: dict[str, list[str]],
     ) -> DeployReadiness:
         record = self.get(release_name)
         blockers: list[str] = []
@@ -372,9 +375,14 @@ class ReleaseLedger:
         evidence: list[str] = [f"release_state:{record.state}", f"approval_roles:{','.join(approval_roles) or 'none'}"]
         predecessor_environment = "staging" if environment == "production" else None
         soak_minutes_observed: int | None = None
+        active_freeze_window = _active_freeze_window(environment, environment_freeze_windows.get(environment, []))
 
         if record.state not in {"approved", "promoted"}:
             blockers.append("release_not_approved")
+
+        if active_freeze_window is not None:
+            blockers.append("environment_frozen")
+            evidence.append(f"freeze_window:{active_freeze_window}")
 
         if environment == "production":
             missing_roles = sorted(set(required_approver_roles) - set(approval_roles))
@@ -406,6 +414,7 @@ class ReleaseLedger:
             required_predecessor_environment=predecessor_environment,
             soak_minutes_required=production_soak_minutes if environment == "production" else 0,
             soak_minutes_observed=soak_minutes_observed,
+            active_freeze_window=active_freeze_window,
         )
 
     def create(self, manifest: ReleaseManifest, manifest_path: Path) -> ReleaseRecord:
@@ -498,6 +507,7 @@ class ReleaseLedger:
         *,
         production_soak_minutes: int,
         required_approver_roles: list[str],
+        environment_freeze_windows: dict[str, list[str]],
     ) -> ReleaseRecord:
         record = self.get(release_name)
         readiness = self.deploy_readiness(
@@ -505,6 +515,7 @@ class ReleaseLedger:
             environment,
             production_soak_minutes=production_soak_minutes,
             required_approver_roles=required_approver_roles,
+            environment_freeze_windows=environment_freeze_windows,
         )
         if not readiness.passed:
             raise ValueError(
@@ -671,6 +682,27 @@ def _minutes_since(timestamp: str, *, now: datetime | None = None) -> int:
     return int(delta.total_seconds() // 60)
 
 
+def _active_freeze_window(environment: str, freeze_windows: list[str], *, now: datetime | None = None) -> str | None:
+    current_time = now or datetime.now().astimezone()
+    current_minutes = current_time.hour * 60 + current_time.minute
+    for window in freeze_windows:
+        try:
+            start_text, end_text = window.split("-", 1)
+            start_hour, start_minute = (int(part) for part in start_text.split(":", 1))
+            end_hour, end_minute = (int(part) for part in end_text.split(":", 1))
+        except Exception:
+            continue
+        start_minutes = start_hour * 60 + start_minute
+        end_minutes = end_hour * 60 + end_minute
+        if start_minutes <= end_minutes:
+            is_active = start_minutes <= current_minutes <= end_minutes
+        else:
+            is_active = current_minutes >= start_minutes or current_minutes <= end_minutes
+        if is_active:
+            return window
+    return None
+
+
 def build_release_manifest(review: ReleaseShadowReview, release_name: str, report_prefix: str) -> ReleaseManifest:
     return ReleaseManifest(
         release_name=release_name,
@@ -757,6 +789,7 @@ def deploy_release(
     ledger_path: Path,
     production_soak_minutes: int = 30,
     required_approver_roles: list[str] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
 ) -> ReleaseRecord:
     ledger = ReleaseLedger.load(ledger_path)
     record = ledger.deploy(
@@ -766,6 +799,7 @@ def deploy_release(
         note,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
     ledger.save(ledger_path)
     return record
@@ -778,6 +812,7 @@ def check_deploy_readiness(
     ledger_path: Path,
     production_soak_minutes: int = 30,
     required_approver_roles: list[str] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
 ) -> DeployReadiness:
     ledger = ReleaseLedger.load(ledger_path)
     return ledger.deploy_readiness(
@@ -785,6 +820,7 @@ def check_deploy_readiness(
         environment,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
 
 

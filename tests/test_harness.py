@@ -582,6 +582,7 @@ def test_check_deploy_readiness_blocks_production_when_staging_soak_is_short(tmp
         environment="production",
         ledger_path=ledger_path,
         production_soak_minutes=30,
+        required_approver_roles=[],
     )
 
     assert readiness.passed is False
@@ -625,6 +626,7 @@ def test_check_deploy_readiness_passes_when_staging_soak_requirement_is_met(tmp_
         note="deploy staging",
         ledger_path=ledger_path,
         production_soak_minutes=0,
+        required_approver_roles=[],
     )
 
     readiness = check_deploy_readiness(
@@ -632,10 +634,47 @@ def test_check_deploy_readiness_passes_when_staging_soak_requirement_is_met(tmp_
         environment="production",
         ledger_path=ledger_path,
         production_soak_minutes=0,
+        required_approver_roles=["qa-owner", "release-manager"],
     )
 
     assert readiness.passed is True
     assert readiness.blockers == []
+
+
+def test_check_deploy_readiness_blocks_when_environment_is_frozen(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-frozen",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-frozen", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+
+    readiness = check_deploy_readiness(
+        "release-frozen",
+        environment="staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+        environment_freeze_windows={"staging": ["00:00-23:59"]},
+    )
+
+    assert readiness.passed is False
+    assert "environment_frozen" in readiness.blockers
+    assert readiness.active_freeze_window == "00:00-23:59"
 
 
 def test_release_ledger_can_roll_back_and_reactivate_prior_release(tmp_path: Path) -> None:

@@ -29,6 +29,7 @@ The release ledger currently uses these states:
 The ledger also tracks environment rollout lineage:
 
 - a release must be `approved` before deployment
+- deployment is blocked when the target environment is inside a configured freeze window
 - `production` deployment requires the same release to be active in `staging`
 - `production` deployment also requires the `staging` rollout to satisfy the configured soak time
 - `production` deployment also requires all configured approver roles to have signed off
@@ -37,6 +38,16 @@ The ledger also tracks environment rollout lineage:
 
 The soak threshold is controlled by `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES` and defaults to `30`.
 Required production sign-off roles are controlled by `AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES` and default to `qa-owner,release-manager`.
+Freeze windows are controlled by `AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS`, which accepts a JSON object keyed by environment name:
+
+```json
+{
+  "staging": ["00:00-06:00"],
+  "production": ["22:00-23:59", "00:00-01:00"]
+}
+```
+
+When a deploy readiness check lands inside one of these windows, the result includes the `environment_frozen` blocker plus the matched `active_freeze_window`.
 
 ## Commands
 

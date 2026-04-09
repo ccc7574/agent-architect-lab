@@ -438,6 +438,7 @@ def cmd_deploy_release(release_name: str, environment: str, actor: str, note: st
         ledger_path=settings.release_ledger_path,
         production_soak_minutes=settings.production_soak_minutes,
         required_approver_roles=settings.production_required_approver_roles,
+        environment_freeze_windows=settings.environment_freeze_windows,
     )
     print(json.dumps(record.to_dict(), indent=2))
     return 0
@@ -478,6 +479,7 @@ def cmd_check_deploy_readiness(release_name: str, environment: str) -> int:
         ledger_path=settings.release_ledger_path,
         production_soak_minutes=settings.production_soak_minutes,
         required_approver_roles=settings.production_required_approver_roles,
+        environment_freeze_windows=settings.environment_freeze_windows,
     )
     print(json.dumps(readiness.to_dict(), indent=2))
     return 0 if readiness.passed else 1

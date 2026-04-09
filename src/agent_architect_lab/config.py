@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -28,6 +29,7 @@ class Settings:
     planner_max_retries: int
     production_soak_minutes: int
     production_required_approver_roles: list[str]
+    environment_freeze_windows: dict[str, list[str]]
 
 
 def _default_artifacts_dir(project_root: Path) -> Path:
@@ -66,6 +68,12 @@ def load_settings() -> Settings:
         ).split(",")
         if role.strip()
     ]
+    environment_freeze_windows = {
+        str(environment): [str(window) for window in windows]
+        for environment, windows in json.loads(
+            os.environ.get("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", "{}")
+        ).items()
+    }
 
     for directory in (
         artifacts_dir,
@@ -100,4 +108,5 @@ def load_settings() -> Settings:
         planner_max_retries=planner_max_retries,
         production_soak_minutes=production_soak_minutes,
         production_required_approver_roles=production_required_approver_roles,
+        environment_freeze_windows=environment_freeze_windows,
     )

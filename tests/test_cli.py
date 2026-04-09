@@ -218,3 +218,23 @@ def test_cmd_check_deploy_readiness_reports_blockers(monkeypatch, tmp_path: Path
 
     assert exit_code == 1
     assert "staging_soak_incomplete" in payload["blockers"]
+
+
+def test_cmd_check_deploy_readiness_reports_freeze_window(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"staging":["00:00-23:59"]}')
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_check_deploy_readiness("release-a", "staging")
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 1
+    assert "environment_frozen" in payload["blockers"]
+    assert payload["active_freeze_window"] == "00:00-23:59"
