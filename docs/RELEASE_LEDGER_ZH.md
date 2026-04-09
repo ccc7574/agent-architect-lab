@@ -105,6 +105,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
 ```
 
+查看多 release 风险看板：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
+```
+
 查看当前环境策略：
 
 ```bash
@@ -270,6 +276,19 @@ override 只用于紧急场景，不应该替代正常流程。
 - 当前仍然生效的 override
 - 即将过期的 override
 - 一条可直接给值班人员阅读的 summary
+
+## release risk board
+
+`release-risk-board` 是面向值班人员的多 release 风险总览。
+
+它会对多个 release 做排序，综合考虑：
+
+- 是否还有未解决的环境 blocker
+- 是否存在即将过期的 override
+- 是否存在仍在生效的 override
+- 当前 release state
+
+它的目标不是替代 `release-readiness-digest`，而是帮助值班人员先决定“先看哪个 release”。
 
 ## 推荐运维流程
 

@@ -150,6 +150,12 @@ Inspect an oncall-oriented readiness digest for a release:
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
 ```
 
+Inspect a ranked risk board across recorded releases:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
+```
+
 Grant a temporary override for a specific blocker:
 
 ```bash
@@ -179,6 +185,7 @@ Operator-oriented summary commands:
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
@@ -191,6 +198,7 @@ When a release name is supplied, each matrix row also includes a `recommended_ac
 Overrides are scoped to one release, one environment, and one exact blocker string. They are intended for time-bounded emergency waivers, not as a replacement for normal approval flow.
 `list-active-overrides` only returns overrides whose expiry has not passed yet.
 `release-readiness-digest` uses `AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES` to decide which overrides should be flagged as expiring soon. The default threshold is `120` minutes.
+`release-risk-board` ranks releases by unresolved environment blockers, expiring overrides, and active override footprint so operators can focus on the riskiest release first.
 
 ## Why This Matters
 

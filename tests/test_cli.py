@@ -20,6 +20,7 @@ from agent_architect_lab.cli import (
     cmd_promote_release,
     cmd_register_report,
     cmd_release_readiness_digest,
+    cmd_release_risk_board,
     cmd_rollout_matrix,
     cmd_rollback_release,
     cmd_release_status,
@@ -468,3 +469,39 @@ def test_cmd_release_readiness_digest_reports_summary(monkeypatch, tmp_path: Pat
     assert payload["recommended_actions"]["production"] == "collect_required_approvals"
     assert len(payload["active_overrides"]) == 1
     assert len(payload["expiring_overrides"]) == 1
+
+
+def test_cmd_release_risk_board_reports_ranked_rows(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-low", "", True, "", "release-low")
+        cmd_approve_release("release-low", "qa-owner", "", "approved")
+        cmd_approve_release("release-low", "release-manager", "release-manager", "approved")
+        cmd_deploy_release("release-low", "staging", "release-manager", "deploy staging")
+        cmd_run_release_shadow(["safety"], "release-high", "", True, "", "release-high")
+        cmd_approve_release("release-high", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-high",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "expiring",
+            "2999-01-01T00:30:00+00:00",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_release_risk_board([], 10)
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["rows"][0]["release_name"] == "release-high"
+    assert payload["rows"][0]["risk_level"] == "high"
+    assert payload["rows"][0]["expiring_override_count"] == 1
+    assert payload["rows"][1]["release_name"] == "release-low"
+    assert payload["rows"][1]["risk_level"] == "low"

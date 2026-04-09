@@ -12,6 +12,7 @@ from agent_architect_lab.harness.ledger import (
     get_deploy_policy,
     get_environment_history,
     get_release_readiness_digest,
+    get_release_risk_board,
     get_rollout_matrix,
     ReleaseLedger,
     build_release_manifest,
@@ -1227,3 +1228,58 @@ def test_release_readiness_digest_summarizes_blockers_and_expiring_overrides(tmp
     assert len(digest.active_overrides) == 1
     assert len(digest.expiring_overrides) == 1
     assert "expire soon" in digest.summary
+
+
+def test_release_risk_board_ranks_releases_by_operator_risk(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-low", report_prefix="low", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-high", report_prefix="high", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-low", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-low", action="approve", actor="release-manager", role="release-manager", note="approved", ledger_path=ledger_path)
+    transition_release("release-high", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release(
+        "release-low",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+    )
+    grant_release_override(
+        "release-high",
+        environment="production",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="expiring",
+        expires_at="2999-01-01T00:30:00+00:00",
+        ledger_path=ledger_path,
+    )
+
+    board = get_release_risk_board(
+        environments=["staging", "production"],
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=["qa-owner", "release-manager"],
+        override_expiring_soon_minutes=999999999,
+        limit=10,
+    )
+
+    assert [row.release_name for row in board.rows[:2]] == ["release-high", "release-low"]
+    assert board.rows[0].risk_level == "high"
+    assert board.rows[0].next_action == "collect_required_approvals"
+    assert board.rows[0].expiring_override_count == 1
+    assert board.rows[1].risk_level == "low"
+    assert board.rows[1].next_action == "observe_release"

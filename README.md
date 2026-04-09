@@ -57,6 +57,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli promote-release 2026-04-10-mai
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
@@ -154,6 +155,7 @@ Use `rollout-matrix [release_name]` to get a multi-environment operator view. Wh
 Use `grant-release-override` to waive a specific deploy blocker for one release and one environment. Overrides are recorded in the release ledger and can include an optional `--expires-at` ISO timestamp.
 Use `list-active-overrides` to audit currently effective overrides across releases or for a specific environment.
 Use `release-readiness-digest <release_name>` as the operator-facing summary view for a release. It condenses blocking environments, recommended actions, active overrides, and soon-to-expire overrides into one payload.
+Use `release-risk-board` to rank multiple recorded releases by operator risk so oncall can decide what to inspect first.
 
 ## Planner Providers
 

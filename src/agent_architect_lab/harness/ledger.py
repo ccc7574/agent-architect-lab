@@ -506,6 +506,46 @@ class ReleaseReadinessDigest:
 
 
 @dataclass(slots=True)
+class ReleaseRiskBoardRow:
+    release_name: str
+    release_state: str
+    risk_level: str
+    active_environments: list[str] = field(default_factory=list)
+    blocking_environments: list[str] = field(default_factory=list)
+    active_override_count: int = 0
+    expiring_override_count: int = 0
+    next_action: str = "observe_release"
+    last_updated_at: str = ""
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "release_name": self.release_name,
+            "release_state": self.release_state,
+            "risk_level": self.risk_level,
+            "active_environments": self.active_environments,
+            "blocking_environments": self.blocking_environments,
+            "active_override_count": self.active_override_count,
+            "expiring_override_count": self.expiring_override_count,
+            "next_action": self.next_action,
+            "last_updated_at": self.last_updated_at,
+            "summary": self.summary,
+        }
+
+
+@dataclass(slots=True)
+class ReleaseRiskBoard:
+    environments: list[str]
+    rows: list[ReleaseRiskBoardRow] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "environments": self.environments,
+            "rows": [row.to_dict() for row in self.rows],
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -756,6 +796,70 @@ class ReleaseLedger:
             active_overrides=active_overrides,
             expiring_overrides=expiring_overrides,
             summary=summary,
+        )
+
+    def release_risk_board(
+        self,
+        *,
+        environments: list[str],
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
+        environment_freeze_windows: dict[str, list[str]],
+        override_expiring_soon_minutes: int,
+        limit: int,
+    ) -> ReleaseRiskBoard:
+        rows: list[ReleaseRiskBoardRow] = []
+        for record in self.list_records()[:limit]:
+            digest = self.release_readiness_digest(
+                record.release_name,
+                environments=environments,
+                production_soak_minutes=production_soak_minutes,
+                required_approver_roles=required_approver_roles,
+                environment_policies=environment_policies,
+                environment_freeze_windows=environment_freeze_windows,
+                override_expiring_soon_minutes=override_expiring_soon_minutes,
+            )
+            active_environments = [
+                environment
+                for environment in environments
+                if _find_active_deployment(record, environment) is not None
+            ]
+            unresolved_blocking_environments = [
+                environment
+                for environment in digest.blocking_environments
+                if digest.recommended_actions.get(environment) != "no_action_already_active"
+            ]
+            rows.append(
+                ReleaseRiskBoardRow(
+                    release_name=record.release_name,
+                    release_state=record.state,
+                    risk_level=_release_risk_level(
+                        record.state,
+                        unresolved_blocking_environments=unresolved_blocking_environments,
+                        active_override_count=len(digest.active_overrides),
+                        expiring_override_count=len(digest.expiring_overrides),
+                    ),
+                    active_environments=active_environments,
+                    blocking_environments=unresolved_blocking_environments,
+                    active_override_count=len(digest.active_overrides),
+                    expiring_override_count=len(digest.expiring_overrides),
+                    next_action=_release_board_next_action(
+                        unresolved_blocking_environments=unresolved_blocking_environments,
+                        recommended_actions=digest.recommended_actions,
+                        active_override_count=len(digest.active_overrides),
+                    ),
+                    last_updated_at=record.last_updated_at,
+                    summary=digest.summary,
+                )
+            )
+        rows.sort(
+            key=lambda row: (_release_risk_rank(row.risk_level), row.last_updated_at),
+            reverse=True,
+        )
+        return ReleaseRiskBoard(
+            environments=list(environments),
+            rows=rows,
         )
 
     def deploy_readiness(
@@ -1284,6 +1388,41 @@ def _build_readiness_digest_summary(
     return summary
 
 
+def _release_risk_rank(level: str) -> int:
+    return {"high": 2, "medium": 1, "low": 0}.get(level, -1)
+
+
+def _release_risk_level(
+    release_state: str,
+    *,
+    unresolved_blocking_environments: list[str],
+    active_override_count: int,
+    expiring_override_count: int,
+) -> str:
+    if release_state in {"blocked", "rejected"}:
+        return "high"
+    if unresolved_blocking_environments or expiring_override_count:
+        return "high"
+    if active_override_count:
+        return "medium"
+    return "low"
+
+
+def _release_board_next_action(
+    *,
+    unresolved_blocking_environments: list[str],
+    recommended_actions: dict[str, str],
+    active_override_count: int,
+) -> str:
+    for environment in unresolved_blocking_environments:
+        action = recommended_actions.get(environment)
+        if action:
+            return action
+    if active_override_count:
+        return "review_active_overrides"
+    return "observe_release"
+
+
 def _latest_timestamp(*timestamps: str | None) -> str:
     present = [timestamp for timestamp in timestamps if timestamp]
     if not present:
@@ -1552,6 +1691,29 @@ def get_release_readiness_digest(
         environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
         override_expiring_soon_minutes=override_expiring_soon_minutes,
+    )
+
+
+def get_release_risk_board(
+    *,
+    environments: list[str],
+    ledger_path: Path,
+    production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
+    override_expiring_soon_minutes: int = 120,
+    limit: int = 20,
+) -> ReleaseRiskBoard:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.release_risk_board(
+        environments=list(environments),
+        production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
+        override_expiring_soon_minutes=override_expiring_soon_minutes,
+        limit=limit,
     )
 
 
