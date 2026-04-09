@@ -11,6 +11,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     get_deploy_policy,
     get_environment_history,
+    get_release_readiness_digest,
     get_rollout_matrix,
     ReleaseLedger,
     build_release_manifest,
@@ -1170,3 +1171,59 @@ def test_list_active_overrides_filters_and_skips_expired_entries(tmp_path: Path)
     assert staging_entries[0].blocker == "environment_frozen"
     assert len(release_entries) == 1
     assert release_entries[0].actor == "incident-commander"
+
+
+def test_release_readiness_digest_summarizes_blockers_and_expiring_overrides(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-digest", report_prefix="digest", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-digest", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release(
+        "release-digest",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+    )
+    grant_release_override(
+        "release-digest",
+        environment="production",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="expires soon",
+        expires_at="2099-01-01T00:30:00+00:00",
+        ledger_path=ledger_path,
+    )
+
+    digest = get_release_readiness_digest(
+        "release-digest",
+        environments=["staging", "production"],
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=["qa-owner", "release-manager"],
+        environment_freeze_windows={"production": ["00:00-23:59"]},
+        override_expiring_soon_minutes=999999999,
+    )
+
+    assert digest.release_name == "release-digest"
+    assert digest.all_ready is False
+    assert digest.blocking_environments == ["staging", "production"]
+    assert digest.ready_environments == []
+    assert digest.recommended_actions["staging"] == "no_action_already_active"
+    assert digest.recommended_actions["production"] == "collect_required_approvals"
+    assert len(digest.active_overrides) == 1
+    assert len(digest.expiring_overrides) == 1
+    assert "expire soon" in digest.summary

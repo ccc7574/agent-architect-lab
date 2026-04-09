@@ -16,6 +16,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     deploy_release,
     get_environment_history,
+    get_release_readiness_digest,
     get_rollout_matrix,
     get_environment_status,
     get_deploy_policy,
@@ -177,6 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     active_overrides_cmd.add_argument("--release-name", default="", help="Optional release filter.")
     active_overrides_cmd.add_argument("--environment", default="", help="Optional environment filter.")
     active_overrides_cmd.add_argument("--limit", type=int, default=50, help="Maximum number of active overrides to return.")
+
+    readiness_digest_cmd = subparsers.add_parser("release-readiness-digest", help="Show an oncall-oriented readiness digest for a release across multiple environments.")
+    readiness_digest_cmd.add_argument("release_name", help="Immutable release name to summarize.")
+    readiness_digest_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -542,6 +547,22 @@ def cmd_list_active_overrides(release_name: str, environment: str, limit: int) -
     return 0
 
 
+def cmd_release_readiness_digest(release_name: str, environments: list[str]) -> int:
+    settings = load_settings()
+    digest = get_release_readiness_digest(
+        release_name,
+        environments=environments or settings.environment_names,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+    )
+    print(json.dumps(digest.to_dict(), indent=2))
+    return 0 if digest.all_ready else 1
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -677,6 +698,8 @@ def main() -> int:
         return cmd_environment_history(args.environment, args.limit)
     if args.command == "list-active-overrides":
         return cmd_list_active_overrides(args.release_name, args.environment, args.limit)
+    if args.command == "release-readiness-digest":
+        return cmd_release_readiness_digest(args.release_name, args.environments)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":

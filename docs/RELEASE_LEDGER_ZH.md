@@ -99,6 +99,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli check-deploy-readiness \
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 ```
 
+查看面向值班人员的 release readiness 摘要：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
+```
+
 查看当前环境策略：
 
 ```bash
@@ -208,6 +214,18 @@ qa-owner,release-manager
 
 并且 `deploy-policy`、`check-deploy-readiness`、`rollout-matrix` 都会使用这套环境级策略。
 
+### 6. override 即将过期阈值
+
+`AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES`
+
+默认值：
+
+```text
+120
+```
+
+它会影响 `release-readiness-digest` 中哪些 override 会被标记为“即将过期风险”。
+
 ## recommended_action 的含义
 
 在 `rollout-matrix` 中，每个环境行都会带一个 `recommended_action`，帮助值班人员直接采取下一步动作。
@@ -238,6 +256,20 @@ override 只用于紧急场景，不应该替代正常流程。
 - 过期后不会再出现在 `list-active-overrides`
 - 某些 blocker 不允许 override
   例如 `release_not_approved` 和 `already_active_in_environment`
+
+## release readiness digest
+
+`release-readiness-digest <release>` 是给 oncall / release manager 用的聚合摘要视图。
+
+它会同时输出：
+
+- 当前 release state
+- 哪些环境已经 ready
+- 哪些环境仍然 blocked
+- 每个环境的 `recommended_action`
+- 当前仍然生效的 override
+- 即将过期的 override
+- 一条可直接给值班人员阅读的 summary
 
 ## 推荐运维流程
 

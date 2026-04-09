@@ -19,6 +19,7 @@ from agent_architect_lab.cli import (
     cmd_list_releases,
     cmd_promote_release,
     cmd_register_report,
+    cmd_release_readiness_digest,
     cmd_rollout_matrix,
     cmd_rollback_release,
     cmd_release_status,
@@ -432,3 +433,38 @@ def test_cmd_list_active_overrides_reports_current_entries(monkeypatch, tmp_path
     assert payload[0]["release_name"] == "release-a"
     assert payload[0]["environment"] == "staging"
     assert payload[0]["blocker"] == "environment_frozen"
+
+
+def test_cmd_release_readiness_digest_reports_summary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"production":["00:00-23:59"]}')
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy staging")
+        cmd_grant_release_override(
+            "release-a",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "hotfix waiver",
+            "2999-01-01T00:30:00+00:00",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_release_readiness_digest("release-a", [])
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 1
+    assert payload["release_name"] == "release-a"
+    assert payload["all_ready"] is False
+    assert payload["blocking_environments"] == ["staging", "production"]
+    assert payload["recommended_actions"]["staging"] == "no_action_already_active"
+    assert payload["recommended_actions"]["production"] == "collect_required_approvals"
+    assert len(payload["active_overrides"]) == 1
+    assert len(payload["expiring_overrides"]) == 1

@@ -478,6 +478,34 @@ class RolloutMatrix:
 
 
 @dataclass(slots=True)
+class ReleaseReadinessDigest:
+    release_name: str
+    release_state: str
+    environments: list[str]
+    all_ready: bool
+    blocking_environments: list[str] = field(default_factory=list)
+    ready_environments: list[str] = field(default_factory=list)
+    recommended_actions: dict[str, str] = field(default_factory=dict)
+    active_overrides: list[ActiveOverrideEntry] = field(default_factory=list)
+    expiring_overrides: list[ActiveOverrideEntry] = field(default_factory=list)
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "release_name": self.release_name,
+            "release_state": self.release_state,
+            "environments": self.environments,
+            "all_ready": self.all_ready,
+            "blocking_environments": self.blocking_environments,
+            "ready_environments": self.ready_environments,
+            "recommended_actions": self.recommended_actions,
+            "active_overrides": [entry.to_dict() for entry in self.active_overrides],
+            "expiring_overrides": [entry.to_dict() for entry in self.expiring_overrides],
+            "summary": self.summary,
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -669,6 +697,65 @@ class ReleaseLedger:
             release_name=release_name,
             all_ready=all_ready,
             rows=rows,
+        )
+
+    def release_readiness_digest(
+        self,
+        release_name: str,
+        *,
+        environments: list[str],
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
+        environment_freeze_windows: dict[str, list[str]],
+        override_expiring_soon_minutes: int,
+    ) -> ReleaseReadinessDigest:
+        record = self.get(release_name)
+        matrix = self.rollout_matrix(
+            environments,
+            release_name=release_name,
+            production_soak_minutes=production_soak_minutes,
+            required_approver_roles=required_approver_roles,
+            environment_policies=environment_policies,
+            environment_freeze_windows=environment_freeze_windows,
+        )
+        active_overrides = self.active_overrides(release_name=release_name)
+        expiring_overrides = [
+            entry
+            for entry in active_overrides
+            if entry.expires_at is not None and _minutes_until(entry.expires_at) <= override_expiring_soon_minutes
+        ]
+        blocking_environments = [
+            row.environment
+            for row in matrix.rows
+            if row.readiness is not None and not row.readiness.passed
+        ]
+        ready_environments = [
+            row.environment
+            for row in matrix.rows
+            if row.readiness is not None and row.readiness.passed
+        ]
+        recommended_actions = {
+            row.environment: row.recommended_action
+            for row in matrix.rows
+        }
+        summary = _build_readiness_digest_summary(
+            release_name,
+            all_ready=bool(matrix.all_ready),
+            blocking_environments=blocking_environments,
+            expiring_override_count=len(expiring_overrides),
+        )
+        return ReleaseReadinessDigest(
+            release_name=release_name,
+            release_state=record.state,
+            environments=list(environments),
+            all_ready=bool(matrix.all_ready),
+            blocking_environments=blocking_environments,
+            ready_environments=ready_environments,
+            recommended_actions=recommended_actions,
+            active_overrides=active_overrides,
+            expiring_overrides=expiring_overrides,
+            summary=summary,
         )
 
     def deploy_readiness(
@@ -1151,6 +1238,17 @@ def _override_is_active(override: ReleaseOverride, *, now: datetime | None = Non
     return current_time <= expiry
 
 
+def _minutes_until(timestamp: str, *, now: datetime | None = None) -> int:
+    expiry = datetime.fromisoformat(timestamp)
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    current_time = now or datetime.now(UTC)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=UTC)
+    delta = expiry - current_time
+    return int(delta.total_seconds() // 60)
+
+
 def _active_override_map(record: ReleaseRecord, environment: str) -> dict[str, ReleaseOverride]:
     overrides: dict[str, ReleaseOverride] = {}
     for override in record.overrides:
@@ -1160,6 +1258,30 @@ def _active_override_map(record: ReleaseRecord, environment: str) -> dict[str, R
             continue
         overrides[override.blocker] = override
     return overrides
+
+
+def _build_readiness_digest_summary(
+    release_name: str,
+    *,
+    all_ready: bool,
+    blocking_environments: list[str],
+    expiring_override_count: int,
+) -> str:
+    if all_ready:
+        if expiring_override_count:
+            return (
+                f"Release '{release_name}' is ready across all evaluated environments, "
+                f"with {expiring_override_count} override(s) expiring soon."
+            )
+        return f"Release '{release_name}' is ready across all evaluated environments."
+    summary = (
+        f"Release '{release_name}' is blocked in environments: "
+        + ", ".join(blocking_environments)
+        + "."
+    )
+    if expiring_override_count:
+        summary += f" {expiring_override_count} override(s) expire soon."
+    return summary
 
 
 def _latest_timestamp(*timestamps: str | None) -> str:
@@ -1407,6 +1529,29 @@ def get_rollout_matrix(
         required_approver_roles=list(required_approver_roles or []),
         environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
+    )
+
+
+def get_release_readiness_digest(
+    release_name: str,
+    *,
+    environments: list[str],
+    ledger_path: Path,
+    production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
+    override_expiring_soon_minutes: int = 120,
+) -> ReleaseReadinessDigest:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.release_readiness_digest(
+        release_name,
+        environments=list(environments),
+        production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
+        override_expiring_soon_minutes=override_expiring_soon_minutes,
     )
 
 

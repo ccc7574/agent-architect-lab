@@ -144,6 +144,12 @@ Inspect a full rollout matrix across the configured environment set:
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 ```
 
+Inspect an oncall-oriented readiness digest for a release:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
+```
+
 Grant a temporary override for a specific blocker:
 
 ```bash
@@ -172,6 +178,7 @@ Operator-oriented summary commands:
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
+PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
@@ -183,6 +190,7 @@ The default environment list used by `rollout-matrix` comes from `AGENT_ARCHITEC
 When a release name is supplied, each matrix row also includes a `recommended_action` such as `deploy`, `collect_required_approvals`, `wait_for_staging_soak`, or `wait_for_freeze_window`.
 Overrides are scoped to one release, one environment, and one exact blocker string. They are intended for time-bounded emergency waivers, not as a replacement for normal approval flow.
 `list-active-overrides` only returns overrides whose expiry has not passed yet.
+`release-readiness-digest` uses `AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES` to decide which overrides should be flagged as expiring soon. The default threshold is `120` minutes.
 
 ## Why This Matters
 
