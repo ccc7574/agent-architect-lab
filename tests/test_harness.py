@@ -9,6 +9,7 @@ from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
     check_deploy_readiness,
+    get_deploy_policy,
     ReleaseLedger,
     build_release_manifest,
     deploy_release,
@@ -675,6 +676,72 @@ def test_check_deploy_readiness_blocks_when_environment_is_frozen(tmp_path: Path
     assert readiness.passed is False
     assert "environment_frozen" in readiness.blockers
     assert readiness.active_freeze_window == "00:00-23:59"
+
+
+def test_get_deploy_policy_reports_environment_requirements_and_head(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-policy",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-policy", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release(
+        "release-policy",
+        action="approve",
+        actor="release-manager",
+        role="release-manager",
+        note="ops approved",
+        ledger_path=ledger_path,
+    )
+    deploy_release(
+        "release-policy",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+    )
+    deploy_release(
+        "release-policy",
+        environment="production",
+        actor="release-manager",
+        note="deploy production",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+    )
+
+    policy = get_deploy_policy(
+        "production",
+        ledger_path=ledger_path,
+        production_soak_minutes=45,
+        required_approver_roles=["qa-owner", "release-manager"],
+        environment_freeze_windows={"production": ["00:00-23:59"]},
+    )
+
+    assert policy.environment == "production"
+    assert policy.required_predecessor_environment == "staging"
+    assert policy.required_approver_roles == ["qa-owner", "release-manager"]
+    assert policy.soak_minutes_required == 45
+    assert policy.freeze_windows == ["00:00-23:59"]
+    assert policy.active_freeze_window == "00:00-23:59"
+    assert policy.environment_status == "active"
+    assert policy.active_release == "release-policy"
 
 
 def test_release_ledger_can_roll_back_and_reactivate_prior_release(tmp_path: Path) -> None:

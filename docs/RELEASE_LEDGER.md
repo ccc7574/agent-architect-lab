@@ -112,6 +112,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli check-deploy-readiness \
   --environment production
 ```
 
+Inspect the active deployment policy for an environment:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment production
+```
+
 Inspect current state and event history:
 
 ```bash
@@ -122,6 +128,7 @@ Operator-oriented summary commands:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
+PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment production
 ```

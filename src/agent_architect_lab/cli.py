@@ -16,6 +16,7 @@ from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     deploy_release,
     get_environment_status,
+    get_deploy_policy,
     get_release_record,
     list_releases,
     record_release_candidate,
@@ -147,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
     readiness_cmd = subparsers.add_parser("check-deploy-readiness", help="Explain whether a release can deploy to an environment under current policy.")
     readiness_cmd.add_argument("release_name", help="Immutable release name.")
     readiness_cmd.add_argument("--environment", required=True, help="Deployment environment to evaluate.")
+
+    deploy_policy_cmd = subparsers.add_parser("deploy-policy", help="Show the current deployment policy and environment head for an environment.")
+    deploy_policy_cmd.add_argument("--environment", required=True, help="Deployment environment to inspect.")
 
     list_releases_cmd = subparsers.add_parser("list-releases", help="List recorded releases in reverse chronological order.")
 
@@ -485,6 +489,19 @@ def cmd_check_deploy_readiness(release_name: str, environment: str) -> int:
     return 0 if readiness.passed else 1
 
 
+def cmd_deploy_policy(environment: str) -> int:
+    settings = load_settings()
+    policy = get_deploy_policy(
+        environment,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_freeze_windows=settings.environment_freeze_windows,
+    )
+    print(json.dumps(policy.to_dict(), indent=2))
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -563,6 +580,8 @@ def main() -> int:
         return cmd_environment_status(args.environment)
     if args.command == "check-deploy-readiness":
         return cmd_check_deploy_readiness(args.release_name, args.environment)
+    if args.command == "deploy-policy":
+        return cmd_deploy_policy(args.environment)
     parser.error("Unknown command")
     return 1
 

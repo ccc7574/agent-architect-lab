@@ -315,6 +315,36 @@ class DeployReadiness:
 
 
 @dataclass(slots=True)
+class DeployPolicy:
+    environment: str
+    required_state: str
+    required_approver_roles: list[str] = field(default_factory=list)
+    required_predecessor_environment: str | None = None
+    soak_minutes_required: int = 0
+    freeze_windows: list[str] = field(default_factory=list)
+    active_freeze_window: str | None = None
+    environment_status: str = "empty"
+    active_release: str | None = None
+    active_release_deployed_at: str | None = None
+    active_release_deployed_by: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "required_state": self.required_state,
+            "required_approver_roles": self.required_approver_roles,
+            "required_predecessor_environment": self.required_predecessor_environment,
+            "soak_minutes_required": self.soak_minutes_required,
+            "freeze_windows": self.freeze_windows,
+            "active_freeze_window": self.active_freeze_window,
+            "environment_status": self.environment_status,
+            "active_release": self.active_release,
+            "active_release_deployed_at": self.active_release_deployed_at,
+            "active_release_deployed_by": self.active_release_deployed_by,
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -358,6 +388,30 @@ class ReleaseLedger:
             deployed_at=deployment.deployed_at,
             deployed_by=deployment.deployed_by,
             status=deployment.status,
+        )
+
+    def deploy_policy(
+        self,
+        environment: str,
+        *,
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+        environment_freeze_windows: dict[str, list[str]],
+    ) -> DeployPolicy:
+        status = self.environment_status(environment)
+        freeze_windows = list(environment_freeze_windows.get(environment, []))
+        return DeployPolicy(
+            environment=environment,
+            required_state="approved",
+            required_approver_roles=list(required_approver_roles) if environment == "production" else [],
+            required_predecessor_environment="staging" if environment == "production" else None,
+            soak_minutes_required=production_soak_minutes if environment == "production" else 0,
+            freeze_windows=freeze_windows,
+            active_freeze_window=_active_freeze_window(environment, freeze_windows),
+            environment_status=status.status,
+            active_release=status.active_release,
+            active_release_deployed_at=status.deployed_at,
+            active_release_deployed_by=status.deployed_by,
         )
 
     def deploy_readiness(
@@ -817,6 +871,23 @@ def check_deploy_readiness(
     ledger = ReleaseLedger.load(ledger_path)
     return ledger.deploy_readiness(
         release_name,
+        environment,
+        production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
+    )
+
+
+def get_deploy_policy(
+    environment: str,
+    *,
+    ledger_path: Path,
+    production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
+) -> DeployPolicy:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.deploy_policy(
         environment,
         production_soak_minutes=production_soak_minutes,
         required_approver_roles=list(required_approver_roles or []),

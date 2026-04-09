@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_architect_lab.cli import (
     cmd_approve_release,
     cmd_check_deploy_readiness,
+    cmd_deploy_policy,
     cmd_deploy_release,
     cmd_environment_status,
     cmd_explain_patterns,
@@ -237,4 +238,31 @@ def test_cmd_check_deploy_readiness_reports_freeze_window(monkeypatch, tmp_path:
 
     assert exit_code == 1
     assert "environment_frozen" in payload["blockers"]
+    assert payload["active_freeze_window"] == "00:00-23:59"
+
+
+def test_cmd_deploy_policy_reports_environment_policy(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"production":["00:00-23:59"]}')
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "45")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "qa approved")
+        cmd_approve_release("release-a", "release-manager", "release-manager", "ops approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy staging")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_deploy_policy("production")
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["environment"] == "production"
+    assert payload["required_predecessor_environment"] == "staging"
+    assert payload["required_approver_roles"] == ["qa-owner", "release-manager"]
+    assert payload["soak_minutes_required"] == 45
+    assert payload["freeze_windows"] == ["00:00-23:59"]
     assert payload["active_freeze_window"] == "00:00-23:59"
