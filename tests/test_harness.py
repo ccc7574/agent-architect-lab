@@ -10,6 +10,7 @@ from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
     check_deploy_readiness,
     get_deploy_policy,
+    get_environment_history,
     ReleaseLedger,
     build_release_manifest,
     deploy_release,
@@ -856,3 +857,34 @@ def test_environment_status_tracks_active_release(tmp_path: Path) -> None:
     assert before_rollback.active_release == "release-env-b"
     assert after_rollback.active_release == "release-env-a"
     assert empty.status == "empty"
+
+
+def test_environment_history_tracks_supersede_and_rollback_lineage(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-env-a", report_prefix="a", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-env-b", report_prefix="b", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-env-a", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-env-b", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release("release-env-a", environment="staging", actor="release-manager", note="deploy A", ledger_path=ledger_path)
+    deploy_release("release-env-b", environment="staging", actor="release-manager", note="deploy B", ledger_path=ledger_path)
+    rollback_release("release-env-b", environment="staging", actor="release-manager", note="rollback B", ledger_path=ledger_path)
+
+    history = get_environment_history("staging", ledger_path=ledger_path)
+
+    assert [entry.release_name for entry in history[:2]] == ["release-env-a", "release-env-b"]
+    assert history[0].status == "active"
+    assert history[0].reactivated_by == "release-manager"
+    assert history[1].status == "rolled_back"
+    assert history[1].rolled_back_by == "release-manager"

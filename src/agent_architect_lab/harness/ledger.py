@@ -345,6 +345,42 @@ class DeployPolicy:
 
 
 @dataclass(slots=True)
+class EnvironmentHistoryEntry:
+    environment: str
+    release_name: str
+    status: str
+    deployed_at: str
+    deployed_by: str
+    note: str = ""
+    replaces_release: str | None = None
+    superseded_at: str | None = None
+    superseded_by_release: str | None = None
+    rolled_back_at: str | None = None
+    rolled_back_by: str | None = None
+    reactivated_at: str | None = None
+    reactivated_by: str | None = None
+    last_transition_at: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "release_name": self.release_name,
+            "status": self.status,
+            "deployed_at": self.deployed_at,
+            "deployed_by": self.deployed_by,
+            "note": self.note,
+            "replaces_release": self.replaces_release,
+            "superseded_at": self.superseded_at,
+            "superseded_by_release": self.superseded_by_release,
+            "rolled_back_at": self.rolled_back_at,
+            "rolled_back_by": self.rolled_back_by,
+            "reactivated_at": self.reactivated_at,
+            "reactivated_by": self.reactivated_by,
+            "last_transition_at": self.last_transition_at,
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -413,6 +449,38 @@ class ReleaseLedger:
             active_release_deployed_at=status.deployed_at,
             active_release_deployed_by=status.deployed_by,
         )
+
+    def environment_history(self, environment: str, *, limit: int = 20) -> list[EnvironmentHistoryEntry]:
+        entries: list[EnvironmentHistoryEntry] = []
+        for record in self.records:
+            for deployment in record.deployments:
+                if deployment.environment != environment:
+                    continue
+                entries.append(
+                    EnvironmentHistoryEntry(
+                        environment=environment,
+                        release_name=record.release_name,
+                        status=deployment.status,
+                        deployed_at=deployment.deployed_at,
+                        deployed_by=deployment.deployed_by,
+                        note=deployment.note,
+                        replaces_release=deployment.replaces_release,
+                        superseded_at=deployment.superseded_at,
+                        superseded_by_release=deployment.superseded_by_release,
+                        rolled_back_at=deployment.rolled_back_at,
+                        rolled_back_by=deployment.rolled_back_by,
+                        reactivated_at=deployment.reactivated_at,
+                        reactivated_by=deployment.reactivated_by,
+                        last_transition_at=_latest_timestamp(
+                            deployment.deployed_at,
+                            deployment.superseded_at,
+                            deployment.rolled_back_at,
+                            deployment.reactivated_at,
+                        ),
+                    )
+                )
+        entries.sort(key=lambda item: item.last_transition_at, reverse=True)
+        return entries[:limit]
 
     def deploy_readiness(
         self,
@@ -757,6 +825,16 @@ def _active_freeze_window(environment: str, freeze_windows: list[str], *, now: d
     return None
 
 
+def _latest_timestamp(*timestamps: str | None) -> str:
+    present = [timestamp for timestamp in timestamps if timestamp]
+    if not present:
+        return ""
+    return max(
+        present,
+        key=lambda item: datetime.fromisoformat(item.replace("Z", "+00:00")),
+    )
+
+
 def build_release_manifest(review: ReleaseShadowReview, release_name: str, report_prefix: str) -> ReleaseManifest:
     return ReleaseManifest(
         release_name=release_name,
@@ -893,6 +971,16 @@ def get_deploy_policy(
         required_approver_roles=list(required_approver_roles or []),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
     )
+
+
+def get_environment_history(
+    environment: str,
+    *,
+    ledger_path: Path,
+    limit: int = 20,
+) -> list[EnvironmentHistoryEntry]:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.environment_history(environment, limit=limit)
 
 
 def rollback_release(

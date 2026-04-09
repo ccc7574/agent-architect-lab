@@ -54,6 +54,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollback-release 2026-04-10-main --environment production --by release-manager --note "rollback due to incident"
 PYTHONPATH=src python3 -m agent_architect_lab.cli promote-release 2026-04-10-main --by release-manager --note "production rollout started"
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
+PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli suggest-incident-evals /tmp/agent-architect-lab/.../reports/latest-report.json --output ./incident-backfill.jsonl

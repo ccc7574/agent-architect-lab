@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_architect_lab.cli import (
     cmd_approve_release,
     cmd_check_deploy_readiness,
+    cmd_environment_history,
     cmd_deploy_policy,
     cmd_deploy_release,
     cmd_environment_status,
@@ -266,3 +267,28 @@ def test_cmd_deploy_policy_reports_environment_policy(monkeypatch, tmp_path: Pat
     assert payload["soak_minutes_required"] == 45
     assert payload["freeze_windows"] == ["00:00-23:59"]
     assert payload["active_freeze_window"] == "00:00-23:59"
+
+
+def test_cmd_environment_history_reports_recent_lineage(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
+        cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
+        cmd_approve_release("release-b", "qa-owner", "", "approved")
+        cmd_deploy_release("release-b", "staging", "release-manager", "deploy B")
+        cmd_rollback_release("release-b", "staging", "release-manager", "rollback B")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_environment_history("staging", 10)
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload[0]["release_name"] == "release-a"
+    assert payload[0]["status"] == "active"
+    assert payload[1]["release_name"] == "release-b"
+    assert payload[1]["status"] == "rolled_back"

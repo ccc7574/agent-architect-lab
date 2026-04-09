@@ -15,6 +15,7 @@ from agent_architect_lab.harness.incidents import save_incident_suggestions, sug
 from agent_architect_lab.harness.ledger import (
     check_deploy_readiness,
     deploy_release,
+    get_environment_history,
     get_environment_status,
     get_deploy_policy,
     get_release_record,
@@ -156,6 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     environment_status_cmd = subparsers.add_parser("environment-status", help="Show the current active release for an environment.")
     environment_status_cmd.add_argument("--environment", required=True, help="Deployment environment to inspect.")
+
+    environment_history_cmd = subparsers.add_parser("environment-history", help="Show recent deployment lineage for an environment.")
+    environment_history_cmd.add_argument("--environment", required=True, help="Deployment environment to inspect.")
+    environment_history_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of deployment entries to return.")
     return parser
 
 
@@ -475,6 +480,13 @@ def cmd_environment_status(environment: str) -> int:
     return 0
 
 
+def cmd_environment_history(environment: str, limit: int) -> int:
+    settings = load_settings()
+    history = get_environment_history(environment, ledger_path=settings.release_ledger_path, limit=limit)
+    print(json.dumps([entry.to_dict() for entry in history], indent=2))
+    return 0
+
+
 def cmd_check_deploy_readiness(release_name: str, environment: str) -> int:
     settings = load_settings()
     readiness = check_deploy_readiness(
@@ -578,6 +590,8 @@ def main() -> int:
         return cmd_list_releases()
     if args.command == "environment-status":
         return cmd_environment_status(args.environment)
+    if args.command == "environment-history":
+        return cmd_environment_history(args.environment, args.limit)
     if args.command == "check-deploy-readiness":
         return cmd_check_deploy_readiness(args.release_name, args.environment)
     if args.command == "deploy-policy":

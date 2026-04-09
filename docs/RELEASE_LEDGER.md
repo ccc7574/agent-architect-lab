@@ -129,6 +129,7 @@ Operator-oriented summary commands:
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
+PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment production
 ```
