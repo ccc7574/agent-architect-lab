@@ -13,8 +13,10 @@ from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import save_incident_suggestions, suggest_incident_evals
 from agent_architect_lab.harness.ledger import (
+    deploy_release,
     get_release_record,
     record_release_candidate,
+    rollback_release,
     transition_release,
 )
 from agent_architect_lab.harness.promotion import default_gate_config_for_suite, evaluate_promotion
@@ -125,6 +127,18 @@ def build_parser() -> argparse.ArgumentParser:
     promote_release.add_argument("release_name", help="Immutable release name.")
     promote_release.add_argument("--by", required=True, help="Operator identity.")
     promote_release.add_argument("--note", default="", help="Optional promotion note.")
+
+    deploy_release_cmd = subparsers.add_parser("deploy-release", help="Mark a release as deployed to an environment and record lineage.")
+    deploy_release_cmd.add_argument("release_name", help="Immutable release name.")
+    deploy_release_cmd.add_argument("--environment", required=True, help="Deployment environment, for example staging or production.")
+    deploy_release_cmd.add_argument("--by", required=True, help="Operator identity.")
+    deploy_release_cmd.add_argument("--note", default="", help="Optional deployment note.")
+
+    rollback_release_cmd = subparsers.add_parser("rollback-release", help="Roll back an active environment deployment and restore prior lineage when possible.")
+    rollback_release_cmd.add_argument("release_name", help="Immutable release name.")
+    rollback_release_cmd.add_argument("--environment", required=True, help="Deployment environment to roll back.")
+    rollback_release_cmd.add_argument("--by", required=True, help="Operator identity.")
+    rollback_release_cmd.add_argument("--note", default="", help="Optional rollback note.")
     return parser
 
 
@@ -400,6 +414,32 @@ def cmd_promote_release(release_name: str, actor: str, note: str) -> int:
     return 0
 
 
+def cmd_deploy_release(release_name: str, environment: str, actor: str, note: str) -> int:
+    settings = load_settings()
+    record = deploy_release(
+        release_name,
+        environment=environment,
+        actor=actor,
+        note=note,
+        ledger_path=settings.release_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
+def cmd_rollback_release(release_name: str, environment: str, actor: str, note: str) -> int:
+    settings = load_settings()
+    record = rollback_release(
+        release_name,
+        environment=environment,
+        actor=actor,
+        note=note,
+        ledger_path=settings.release_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -468,6 +508,10 @@ def main() -> int:
         return cmd_reject_release(args.release_name, args.by, args.note)
     if args.command == "promote-release":
         return cmd_promote_release(args.release_name, args.by, args.note)
+    if args.command == "deploy-release":
+        return cmd_deploy_release(args.release_name, args.environment, args.by, args.note)
+    if args.command == "rollback-release":
+        return cmd_rollback_release(args.release_name, args.environment, args.by, args.note)
     parser.error("Unknown command")
     return 1
 

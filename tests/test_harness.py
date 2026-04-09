@@ -10,7 +10,9 @@ from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
     ReleaseLedger,
     build_release_manifest,
+    deploy_release,
     record_release_candidate,
+    rollback_release,
     transition_release,
 )
 from agent_architect_lab.harness.policies import summarize_policy_findings
@@ -432,3 +434,140 @@ def test_release_ledger_rejects_invalid_transition(tmp_path: Path) -> None:
         assert "Cannot apply action" in str(exc)
     else:
         raise AssertionError("Expected invalid transition to raise ValueError.")
+
+
+def test_release_ledger_requires_approval_before_deploy(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-005",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+
+    try:
+        deploy_release(
+            "release-005",
+            environment="staging",
+            actor="release-manager",
+            note="try deploy too early",
+            ledger_path=releases_dir / "release-ledger.json",
+        )
+    except ValueError as exc:
+        assert "must be approved" in str(exc)
+    else:
+        raise AssertionError("Expected deployment without approval to raise ValueError.")
+
+
+def test_release_ledger_requires_staging_before_production(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["retrieval"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"retrieval": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-006",
+        report_prefix="candidate",
+        releases_dir=releases_dir,
+    )
+    transition_release(
+        "release-006",
+        action="approve",
+        actor="qa-owner",
+        note="approved",
+        ledger_path=releases_dir / "release-ledger.json",
+    )
+
+    try:
+        deploy_release(
+            "release-006",
+            environment="production",
+            actor="release-manager",
+            note="skip staging",
+            ledger_path=releases_dir / "release-ledger.json",
+        )
+    except ValueError as exc:
+        assert "staging" in str(exc)
+    else:
+        raise AssertionError("Expected production deployment without staging to raise ValueError.")
+
+
+def test_release_ledger_can_roll_back_and_reactivate_prior_release(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(
+        review,
+        release_name="release-007-a",
+        report_prefix="candidate-a",
+        releases_dir=releases_dir,
+    )
+    record_release_candidate(
+        review,
+        release_name="release-007-b",
+        report_prefix="candidate-b",
+        releases_dir=releases_dir,
+    )
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-007-a", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-007-b", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+
+    first = deploy_release(
+        "release-007-a",
+        environment="staging",
+        actor="release-manager",
+        note="deploy A",
+        ledger_path=ledger_path,
+    )
+    second = deploy_release(
+        "release-007-b",
+        environment="staging",
+        actor="release-manager",
+        note="deploy B",
+        ledger_path=ledger_path,
+    )
+    rolled_back = rollback_release(
+        "release-007-b",
+        environment="staging",
+        actor="release-manager",
+        note="rollback B",
+        ledger_path=ledger_path,
+    )
+    ledger = ReleaseLedger.load(ledger_path)
+    restored = ledger.get("release-007-a")
+    rolled_back_record = ledger.get("release-007-b")
+
+    assert first.deployments[-1].status in {"active", "superseded"}
+    assert second.deployments[-1].status in {"active", "rolled_back"}
+    assert rolled_back.deployments[-1].rolled_back_by == "release-manager"
+    assert rolled_back_record.deployments[-1].status == "rolled_back"
+    assert restored.deployments[-1].status == "active"
+    assert restored.deployments[-1].reactivated_by == "release-manager"

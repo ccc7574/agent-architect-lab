@@ -43,6 +43,64 @@ class ReleaseEvent:
 
 
 @dataclass(slots=True)
+class ReleaseDeployment:
+    environment: str
+    status: str
+    deployed_at: str
+    deployed_by: str
+    note: str = ""
+    replaces_release: str | None = None
+    superseded_at: str | None = None
+    superseded_by_release: str | None = None
+    superseded_note: str = ""
+    rolled_back_at: str | None = None
+    rolled_back_by: str | None = None
+    rollback_note: str = ""
+    reactivated_at: str | None = None
+    reactivated_by: str | None = None
+    reactivation_note: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "status": self.status,
+            "deployed_at": self.deployed_at,
+            "deployed_by": self.deployed_by,
+            "note": self.note,
+            "replaces_release": self.replaces_release,
+            "superseded_at": self.superseded_at,
+            "superseded_by_release": self.superseded_by_release,
+            "superseded_note": self.superseded_note,
+            "rolled_back_at": self.rolled_back_at,
+            "rolled_back_by": self.rolled_back_by,
+            "rollback_note": self.rollback_note,
+            "reactivated_at": self.reactivated_at,
+            "reactivated_by": self.reactivated_by,
+            "reactivation_note": self.reactivation_note,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ReleaseDeployment":
+        return cls(
+            environment=payload["environment"],
+            status=payload["status"],
+            deployed_at=payload["deployed_at"],
+            deployed_by=payload["deployed_by"],
+            note=payload.get("note", ""),
+            replaces_release=payload.get("replaces_release"),
+            superseded_at=payload.get("superseded_at"),
+            superseded_by_release=payload.get("superseded_by_release"),
+            superseded_note=payload.get("superseded_note", ""),
+            rolled_back_at=payload.get("rolled_back_at"),
+            rolled_back_by=payload.get("rolled_back_by"),
+            rollback_note=payload.get("rollback_note", ""),
+            reactivated_at=payload.get("reactivated_at"),
+            reactivated_by=payload.get("reactivated_by"),
+            reactivation_note=payload.get("reactivation_note", ""),
+        )
+
+
+@dataclass(slots=True)
 class ReleaseSuiteSnapshot:
     suite_name: str
     baseline_report_path: str
@@ -144,6 +202,7 @@ class ReleaseRecord:
     suites: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    deployments: list[ReleaseDeployment] = field(default_factory=list)
     events: list[ReleaseEvent] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -158,6 +217,7 @@ class ReleaseRecord:
             "suites": self.suites,
             "blockers": self.blockers,
             "warnings": self.warnings,
+            "deployments": [deployment.to_dict() for deployment in self.deployments],
             "events": [event.to_dict() for event in self.events],
         }
 
@@ -174,6 +234,7 @@ class ReleaseRecord:
             suites=list(payload.get("suites", [])),
             blockers=list(payload.get("blockers", [])),
             warnings=list(payload.get("warnings", [])),
+            deployments=[ReleaseDeployment.from_dict(item) for item in payload.get("deployments", [])],
             events=[ReleaseEvent.from_dict(item) for item in payload.get("events", [])],
         )
 
@@ -251,6 +312,105 @@ class ReleaseLedger:
         record.last_updated_at = timestamp
         return record
 
+    def deploy(self, release_name: str, environment: str, actor: str, note: str = "") -> ReleaseRecord:
+        record = self.get(release_name)
+        _validate_deploy_transition(record, environment)
+        timestamp = utc_now_iso()
+        current_head = _current_environment_head(self.records, environment)
+        if current_head is not None and current_head[0].release_name == release_name:
+            raise ValueError(f"Release '{release_name}' is already active in environment '{environment}'.")
+
+        replaced_release = None
+        if current_head is not None:
+            replaced_record, replaced_deployment = current_head
+            replaced_release = replaced_record.release_name
+            replaced_deployment.status = "superseded"
+            replaced_deployment.superseded_at = timestamp
+            replaced_deployment.superseded_by_release = release_name
+            replaced_deployment.superseded_note = note
+            replaced_record.last_updated_at = timestamp
+            replaced_record.events.append(
+                ReleaseEvent(
+                    timestamp=timestamp,
+                    action=f"superseded:{environment}",
+                    actor=actor,
+                    from_state=replaced_record.state,
+                    to_state=replaced_record.state,
+                    note=f"Superseded by release '{release_name}'.",
+                )
+            )
+
+        record.deployments.append(
+            ReleaseDeployment(
+                environment=environment,
+                status="active",
+                deployed_at=timestamp,
+                deployed_by=actor,
+                note=note,
+                replaces_release=replaced_release,
+            )
+        )
+        previous_state = record.state
+        if record.state == "approved":
+            record.state = "promoted"
+        record.last_updated_at = timestamp
+        record.events.append(
+            ReleaseEvent(
+                timestamp=timestamp,
+                action=f"deploy:{environment}",
+                actor=actor,
+                from_state=previous_state,
+                to_state=record.state,
+                note=note,
+            )
+        )
+        return record
+
+    def rollback(self, release_name: str, environment: str, actor: str, note: str = "") -> ReleaseRecord:
+        record = self.get(release_name)
+        active_deployment = _find_active_deployment(record, environment)
+        if active_deployment is None:
+            raise ValueError(f"Release '{release_name}' has no active deployment in environment '{environment}'.")
+
+        timestamp = utc_now_iso()
+        active_deployment.status = "rolled_back"
+        active_deployment.rolled_back_at = timestamp
+        active_deployment.rolled_back_by = actor
+        active_deployment.rollback_note = note
+        record.last_updated_at = timestamp
+        record.events.append(
+            ReleaseEvent(
+                timestamp=timestamp,
+                action=f"rollback:{environment}",
+                actor=actor,
+                from_state=record.state,
+                to_state=record.state,
+                note=note,
+            )
+        )
+
+        restored_release = active_deployment.replaces_release
+        if restored_release:
+            restored_record = self.get(restored_release)
+            restored_deployment = _find_latest_deployment(restored_record, environment, status="superseded")
+            if restored_deployment is not None:
+                restored_deployment.status = "active"
+                restored_deployment.reactivated_at = timestamp
+                restored_deployment.reactivated_by = actor
+                restored_deployment.reactivation_note = note
+                restored_record.last_updated_at = timestamp
+                restored_record.events.append(
+                    ReleaseEvent(
+                        timestamp=timestamp,
+                        action=f"reactivate:{environment}",
+                        actor=actor,
+                        from_state=restored_record.state,
+                        to_state=restored_record.state,
+                        note=f"Reactivated after rollback of '{release_name}'.",
+                    )
+                )
+        return record
+
 
 def _next_state(current_state: str, action: str) -> str:
     transitions = {
@@ -264,6 +424,49 @@ def _next_state(current_state: str, action: str) -> str:
     if next_state is None:
         raise ValueError(f"Cannot apply action '{action}' when release state is '{current_state}'.")
     return next_state
+
+
+def _validate_deploy_transition(record: ReleaseRecord, environment: str) -> None:
+    if record.state not in {"approved", "promoted"}:
+        raise ValueError(f"Release '{record.release_name}' must be approved before deployment.")
+    if environment == "production" and _find_active_deployment(record, "staging") is None:
+        raise ValueError(f"Release '{record.release_name}' must be active in 'staging' before production deployment.")
+
+
+def _find_latest_deployment(
+    record: ReleaseRecord,
+    environment: str,
+    *,
+    status: str | None = None,
+) -> ReleaseDeployment | None:
+    for deployment in reversed(record.deployments):
+        if deployment.environment != environment:
+            continue
+        if status is not None and deployment.status != status:
+            continue
+        return deployment
+    return None
+
+
+def _find_active_deployment(record: ReleaseRecord, environment: str) -> ReleaseDeployment | None:
+    return _find_latest_deployment(record, environment, status="active")
+
+
+def _current_environment_head(
+    records: list[ReleaseRecord],
+    environment: str,
+) -> tuple[ReleaseRecord, ReleaseDeployment] | None:
+    candidates: list[tuple[str, ReleaseRecord, ReleaseDeployment]] = []
+    for record in records:
+        deployment = _find_active_deployment(record, environment)
+        if deployment is None:
+            continue
+        candidates.append((deployment.deployed_at, record, deployment))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _, record, deployment = candidates[0]
+    return record, deployment
 
 
 def build_release_manifest(review: ReleaseShadowReview, release_name: str, report_prefix: str) -> ReleaseManifest:
@@ -335,5 +538,33 @@ def transition_release(
 ) -> ReleaseRecord:
     ledger = ReleaseLedger.load(ledger_path)
     record = ledger.transition(release_name, action, actor, note)
+    ledger.save(ledger_path)
+    return record
+
+
+def deploy_release(
+    release_name: str,
+    *,
+    environment: str,
+    actor: str,
+    note: str = "",
+    ledger_path: Path,
+) -> ReleaseRecord:
+    ledger = ReleaseLedger.load(ledger_path)
+    record = ledger.deploy(release_name, environment, actor, note)
+    ledger.save(ledger_path)
+    return record
+
+
+def rollback_release(
+    release_name: str,
+    *,
+    environment: str,
+    actor: str,
+    note: str = "",
+    ledger_path: Path,
+) -> ReleaseRecord:
+    ledger = ReleaseLedger.load(ledger_path)
+    record = ledger.rollback(release_name, environment, actor, note)
     ledger.save(ledger_path)
     return record

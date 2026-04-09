@@ -24,6 +24,15 @@ The release ledger currently uses these states:
 - `promoted`: an operator marked the approved release as promoted
 - `rejected`: a reviewer explicitly rejected the release
 
+## Deployment Policy
+
+The ledger also tracks environment rollout lineage:
+
+- a release must be `approved` before deployment
+- `production` deployment requires the same release to be active in `staging`
+- deploying a new release into an environment supersedes the previous active release
+- rolling back the active release reactivates the superseded release when lineage is available
+
 ## Commands
 
 Create a release record while running multi-suite shadow review:
@@ -50,6 +59,28 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli promote-release \
   --note "production rollout started"
 ```
 
+Deploy and roll back environments:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release \
+  2026-04-10-main \
+  --environment staging \
+  --by release-manager \
+  --note "staging rollout"
+
+PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release \
+  2026-04-10-main \
+  --environment production \
+  --by release-manager \
+  --note "production rollout"
+
+PYTHONPATH=src python3 -m agent_architect_lab.cli rollback-release \
+  2026-04-10-main \
+  --environment production \
+  --by release-manager \
+  --note "rollback due to incident"
+```
+
 Inspect current state and event history:
 
 ```bash
@@ -62,5 +93,6 @@ Without this split, teams often lose the distinction between:
 
 - the benchmark evidence that justified a release
 - and the human decisions that changed rollout state later
+- and which release actually held each environment before and after a rollback
 
 Strong agent architecture requires both.

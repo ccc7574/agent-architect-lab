@@ -7,10 +7,12 @@ from pathlib import Path
 
 from agent_architect_lab.cli import (
     cmd_approve_release,
+    cmd_deploy_release,
     cmd_explain_patterns,
     cmd_list_skills,
     cmd_promote_release,
     cmd_register_report,
+    cmd_rollback_release,
     cmd_release_status,
     cmd_run_evals,
     cmd_run_release_shadow,
@@ -129,3 +131,39 @@ def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, t
     assert promote_payload["state"] == "promoted"
     assert status_exit == 0
     assert status_payload["state"] == "promoted"
+
+
+def test_cmd_deploy_and_rollback_release(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
+
+        cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
+        cmd_approve_release("release-b", "qa-owner", "approved")
+
+    deploy_buffer = io.StringIO()
+    with redirect_stdout(deploy_buffer):
+        deploy_exit = cmd_deploy_release("release-b", "staging", "release-manager", "deploy B")
+    deploy_payload = json.loads(deploy_buffer.getvalue())
+
+    rollback_buffer = io.StringIO()
+    with redirect_stdout(rollback_buffer):
+        rollback_exit = cmd_rollback_release("release-b", "staging", "release-manager", "rollback B")
+    rollback_payload = json.loads(rollback_buffer.getvalue())
+
+    status_buffer = io.StringIO()
+    with redirect_stdout(status_buffer):
+        status_exit = cmd_release_status("release-a")
+    status_payload = json.loads(status_buffer.getvalue())
+
+    assert deploy_exit == 0
+    assert deploy_payload["deployments"][-1]["environment"] == "staging"
+    assert deploy_payload["deployments"][-1]["status"] == "active"
+    assert rollback_exit == 0
+    assert rollback_payload["deployments"][-1]["status"] == "rolled_back"
+    assert status_exit == 0
+    assert status_payload["deployments"][-1]["status"] == "active"
