@@ -102,6 +102,31 @@ class ReleaseDeployment:
 
 
 @dataclass(slots=True)
+class ReleaseApproval:
+    actor: str
+    role: str
+    timestamp: str
+    note: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "actor": self.actor,
+            "role": self.role,
+            "timestamp": self.timestamp,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ReleaseApproval":
+        return cls(
+            actor=payload["actor"],
+            role=payload["role"],
+            timestamp=payload["timestamp"],
+            note=payload.get("note", ""),
+        )
+
+
+@dataclass(slots=True)
 class ReleaseSuiteSnapshot:
     suite_name: str
     baseline_report_path: str
@@ -203,6 +228,7 @@ class ReleaseRecord:
     suites: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    approvals: list[ReleaseApproval] = field(default_factory=list)
     deployments: list[ReleaseDeployment] = field(default_factory=list)
     events: list[ReleaseEvent] = field(default_factory=list)
 
@@ -218,6 +244,7 @@ class ReleaseRecord:
             "suites": self.suites,
             "blockers": self.blockers,
             "warnings": self.warnings,
+            "approvals": [approval.to_dict() for approval in self.approvals],
             "deployments": [deployment.to_dict() for deployment in self.deployments],
             "events": [event.to_dict() for event in self.events],
         }
@@ -235,6 +262,7 @@ class ReleaseRecord:
             suites=list(payload.get("suites", [])),
             blockers=list(payload.get("blockers", [])),
             warnings=list(payload.get("warnings", [])),
+            approvals=[ReleaseApproval.from_dict(item) for item in payload.get("approvals", [])],
             deployments=[ReleaseDeployment.from_dict(item) for item in payload.get("deployments", [])],
             events=[ReleaseEvent.from_dict(item) for item in payload.get("events", [])],
         )
@@ -330,10 +358,18 @@ class ReleaseLedger:
             status=deployment.status,
         )
 
-    def deploy_readiness(self, release_name: str, environment: str, *, production_soak_minutes: int) -> DeployReadiness:
+    def deploy_readiness(
+        self,
+        release_name: str,
+        environment: str,
+        *,
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+    ) -> DeployReadiness:
         record = self.get(release_name)
         blockers: list[str] = []
-        evidence: list[str] = [f"release_state:{record.state}"]
+        approval_roles = sorted({approval.role for approval in record.approvals})
+        evidence: list[str] = [f"release_state:{record.state}", f"approval_roles:{','.join(approval_roles) or 'none'}"]
         predecessor_environment = "staging" if environment == "production" else None
         soak_minutes_observed: int | None = None
 
@@ -341,6 +377,9 @@ class ReleaseLedger:
             blockers.append("release_not_approved")
 
         if environment == "production":
+            missing_roles = sorted(set(required_approver_roles) - set(approval_roles))
+            if missing_roles:
+                blockers.append(f"missing_required_approvals:{','.join(missing_roles)}")
             staging_deployment = _find_active_deployment(record, "staging")
             if staging_deployment is None:
                 blockers.append("missing_active_staging_deployment")
@@ -401,6 +440,8 @@ class ReleaseLedger:
         return record
 
     def transition(self, release_name: str, action: str, actor: str, note: str = "") -> ReleaseRecord:
+        if action == "approve":
+            return self.approve(release_name, actor, actor, note)
         record = self.get(release_name)
         target_state = _next_state(record.state, action)
         timestamp = utc_now_iso()
@@ -418,6 +459,36 @@ class ReleaseLedger:
         record.last_updated_at = timestamp
         return record
 
+    def approve(self, release_name: str, actor: str, role: str, note: str = "") -> ReleaseRecord:
+        record = self.get(release_name)
+        if record.state not in {"pending_approval", "approved"}:
+            raise ValueError(f"Cannot approve release '{release_name}' when state is '{record.state}'.")
+        if any(approval.role == role for approval in record.approvals):
+            raise ValueError(f"Release '{release_name}' already has an approval for role '{role}'.")
+        timestamp = utc_now_iso()
+        record.approvals.append(
+            ReleaseApproval(
+                actor=actor,
+                role=role,
+                timestamp=timestamp,
+                note=note,
+            )
+        )
+        previous_state = record.state
+        record.state = "approved"
+        record.last_updated_at = timestamp
+        record.events.append(
+            ReleaseEvent(
+                timestamp=timestamp,
+                action="approve",
+                actor=actor,
+                from_state=previous_state,
+                to_state=record.state,
+                note=note or f"approval_role:{role}",
+            )
+        )
+        return record
+
     def deploy(
         self,
         release_name: str,
@@ -426,12 +497,14 @@ class ReleaseLedger:
         note: str = "",
         *,
         production_soak_minutes: int,
+        required_approver_roles: list[str],
     ) -> ReleaseRecord:
         record = self.get(release_name)
         readiness = self.deploy_readiness(
             release_name,
             environment,
             production_soak_minutes=production_soak_minutes,
+            required_approver_roles=required_approver_roles,
         )
         if not readiness.passed:
             raise ValueError(
@@ -664,9 +737,13 @@ def transition_release(
     actor: str,
     note: str = "",
     ledger_path: Path,
+    role: str | None = None,
 ) -> ReleaseRecord:
     ledger = ReleaseLedger.load(ledger_path)
-    record = ledger.transition(release_name, action, actor, note)
+    if action == "approve":
+        record = ledger.approve(release_name, actor, role or actor, note)
+    else:
+        record = ledger.transition(release_name, action, actor, note)
     ledger.save(ledger_path)
     return record
 
@@ -679,6 +756,7 @@ def deploy_release(
     note: str = "",
     ledger_path: Path,
     production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
 ) -> ReleaseRecord:
     ledger = ReleaseLedger.load(ledger_path)
     record = ledger.deploy(
@@ -687,6 +765,7 @@ def deploy_release(
         actor,
         note,
         production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
     )
     ledger.save(ledger_path)
     return record
@@ -698,12 +777,14 @@ def check_deploy_readiness(
     environment: str,
     ledger_path: Path,
     production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
 ) -> DeployReadiness:
     ledger = ReleaseLedger.load(ledger_path)
     return ledger.deploy_readiness(
         release_name,
         environment,
         production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
     )
 
 

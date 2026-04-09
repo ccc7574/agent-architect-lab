@@ -27,6 +27,7 @@ class Settings:
     planner_timeout_s: float
     planner_max_retries: int
     production_soak_minutes: int
+    production_required_approver_roles: list[str]
 
 
 def _default_artifacts_dir(project_root: Path) -> Path:
@@ -57,6 +58,14 @@ def load_settings() -> Settings:
     planner_timeout_s = float(os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_TIMEOUT_S", "20"))
     planner_max_retries = int(os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_MAX_RETRIES", "2"))
     production_soak_minutes = int(os.environ.get("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "30"))
+    production_required_approver_roles = [
+        role.strip()
+        for role in os.environ.get(
+            "AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES",
+            "qa-owner,release-manager",
+        ).split(",")
+        if role.strip()
+    ]
 
     for directory in (
         artifacts_dir,
@@ -90,4 +99,5 @@ def load_settings() -> Settings:
         planner_timeout_s=planner_timeout_s,
         planner_max_retries=planner_max_retries,
         production_soak_minutes=production_soak_minutes,
+        production_required_approver_roles=production_required_approver_roles,
     )

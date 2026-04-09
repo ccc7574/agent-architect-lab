@@ -45,7 +45,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-shadow /tmp/agent-architec
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval approval_simulation --report-prefix release-candidate --suite-aware-defaults --output-backfill-dir ./release-backfills
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --baseline-manifest ./baseline-manifest.json --report-prefix release-candidate --suite-aware-defaults
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --report-prefix release-candidate --suite-aware-defaults --release-name 2026-04-10-main
-PYTHONPATH=src python3 -m agent_architect_lab.cli approve-release 2026-04-10-main --by qa-owner --note "gate review complete"
+PYTHONPATH=src python3 -m agent_architect_lab.cli approve-release 2026-04-10-main --by qa-owner --role qa-owner --note "gate review complete"
+PYTHONPATH=src python3 -m agent_architect_lab.cli approve-release 2026-04-10-main --by release-manager --role release-manager --note "ops sign-off complete"
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main --environment staging --by release-manager --note "staging rollout"
 PYTHONPATH=src python3 -m agent_architect_lab.cli check-deploy-readiness 2026-04-10-main --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release 2026-04-10-main --environment production --by release-manager --note "production rollout"
@@ -136,6 +137,7 @@ Recorded releases are stored separately under `artifacts/releases`:
 That split makes it possible to audit what was reviewed versus what was later approved or promoted.
 
 Production deploy readiness also respects `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES`, which defaults to `30`.
+Required production sign-off roles come from `AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES`, which defaults to `qa-owner,release-manager`.
 
 ## Planner Providers
 

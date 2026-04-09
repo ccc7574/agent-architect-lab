@@ -434,7 +434,7 @@ def test_release_ledger_rejects_invalid_transition(tmp_path: Path) -> None:
             ledger_path=releases_dir / "release-ledger.json",
         )
     except ValueError as exc:
-        assert "Cannot apply action" in str(exc)
+        assert "Cannot approve release" in str(exc)
     else:
         raise AssertionError("Expected invalid transition to raise ValueError.")
 
@@ -610,6 +610,14 @@ def test_check_deploy_readiness_passes_when_staging_soak_requirement_is_met(tmp_
     )
     ledger_path = releases_dir / "release-ledger.json"
     transition_release("release-ready", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release(
+        "release-ready",
+        action="approve",
+        actor="release-manager",
+        role="release-manager",
+        note="ops approved",
+        ledger_path=ledger_path,
+    )
     deploy_release(
         "release-ready",
         environment="staging",

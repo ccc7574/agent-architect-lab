@@ -119,6 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     approve_release = subparsers.add_parser("approve-release", help="Approve a pending release in the release ledger.")
     approve_release.add_argument("release_name", help="Immutable release name.")
     approve_release.add_argument("--by", required=True, help="Approver identity.")
+    approve_release.add_argument("--role", default="", help="Optional approver role for production readiness policy. Defaults to the actor name.")
     approve_release.add_argument("--note", default="", help="Optional approval note.")
 
     reject_release = subparsers.add_parser("reject-release", help="Reject a pending or approved release in the release ledger.")
@@ -387,7 +388,7 @@ def cmd_release_status(release_name: str) -> int:
     return 0
 
 
-def cmd_approve_release(release_name: str, actor: str, note: str) -> int:
+def cmd_approve_release(release_name: str, actor: str, role: str, note: str) -> int:
     settings = load_settings()
     record = transition_release(
         release_name,
@@ -395,6 +396,7 @@ def cmd_approve_release(release_name: str, actor: str, note: str) -> int:
         actor=actor,
         note=note,
         ledger_path=settings.release_ledger_path,
+        role=role or actor,
     )
     print(json.dumps(record.to_dict(), indent=2))
     return 0
@@ -435,6 +437,7 @@ def cmd_deploy_release(release_name: str, environment: str, actor: str, note: st
         note=note,
         ledger_path=settings.release_ledger_path,
         production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
     )
     print(json.dumps(record.to_dict(), indent=2))
     return 0
@@ -474,6 +477,7 @@ def cmd_check_deploy_readiness(release_name: str, environment: str) -> int:
         environment=environment,
         ledger_path=settings.release_ledger_path,
         production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
     )
     print(json.dumps(readiness.to_dict(), indent=2))
     return 0 if readiness.passed else 1
@@ -542,7 +546,7 @@ def main() -> int:
     if args.command == "release-status":
         return cmd_release_status(args.release_name)
     if args.command == "approve-release":
-        return cmd_approve_release(args.release_name, args.by, args.note)
+        return cmd_approve_release(args.release_name, args.by, args.role, args.note)
     if args.command == "reject-release":
         return cmd_reject_release(args.release_name, args.by, args.note)
     if args.command == "promote-release":

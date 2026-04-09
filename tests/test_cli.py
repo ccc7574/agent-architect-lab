@@ -112,7 +112,7 @@ def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, t
 
     approve_buffer = io.StringIO()
     with redirect_stdout(approve_buffer):
-        approve_exit = cmd_approve_release("release-qa-001", "qa-owner", "looks good")
+        approve_exit = cmd_approve_release("release-qa-001", "qa-owner", "", "looks good")
     approve_payload = json.loads(approve_buffer.getvalue())
 
     promote_buffer = io.StringIO()
@@ -142,11 +142,11 @@ def test_cmd_deploy_and_rollback_release(monkeypatch, tmp_path: Path) -> None:
     with redirect_stdout(io.StringIO()):
         cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
         cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
-        cmd_approve_release("release-a", "qa-owner", "approved")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
         cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
 
         cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
-        cmd_approve_release("release-b", "qa-owner", "approved")
+        cmd_approve_release("release-b", "qa-owner", "", "approved")
 
     deploy_buffer = io.StringIO()
     with redirect_stdout(deploy_buffer):
@@ -178,10 +178,10 @@ def test_cmd_list_releases_and_environment_status(monkeypatch, tmp_path: Path) -
     with redirect_stdout(io.StringIO()):
         cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
         cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
-        cmd_approve_release("release-a", "qa-owner", "approved")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
         cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
         cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
-        cmd_approve_release("release-b", "qa-owner", "approved")
+        cmd_approve_release("release-b", "qa-owner", "", "approved")
         cmd_deploy_release("release-b", "staging", "release-manager", "deploy B")
 
     releases_buffer = io.StringIO()
@@ -203,11 +203,12 @@ def test_cmd_list_releases_and_environment_status(monkeypatch, tmp_path: Path) -
 def test_cmd_check_deploy_readiness_reports_blockers(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "30")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
 
     with redirect_stdout(io.StringIO()):
         cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
         cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
-        cmd_approve_release("release-a", "qa-owner", "approved")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
         cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
 
     buffer = io.StringIO()
