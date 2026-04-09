@@ -14,7 +14,9 @@ from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import save_incident_suggestions, suggest_incident_evals
 from agent_architect_lab.harness.ledger import (
     deploy_release,
+    get_environment_status,
     get_release_record,
+    list_releases,
     record_release_candidate,
     rollback_release,
     transition_release,
@@ -139,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
     rollback_release_cmd.add_argument("--environment", required=True, help="Deployment environment to roll back.")
     rollback_release_cmd.add_argument("--by", required=True, help="Operator identity.")
     rollback_release_cmd.add_argument("--note", default="", help="Optional rollback note.")
+
+    list_releases_cmd = subparsers.add_parser("list-releases", help="List recorded releases in reverse chronological order.")
+
+    environment_status_cmd = subparsers.add_parser("environment-status", help="Show the current active release for an environment.")
+    environment_status_cmd.add_argument("--environment", required=True, help="Deployment environment to inspect.")
     return parser
 
 
@@ -440,6 +447,20 @@ def cmd_rollback_release(release_name: str, environment: str, actor: str, note: 
     return 0
 
 
+def cmd_list_releases() -> int:
+    settings = load_settings()
+    records = list_releases(ledger_path=settings.release_ledger_path)
+    print(json.dumps([record.to_dict() for record in records], indent=2))
+    return 0
+
+
+def cmd_environment_status(environment: str) -> int:
+    settings = load_settings()
+    status = get_environment_status(environment, ledger_path=settings.release_ledger_path)
+    print(json.dumps(status.to_dict(), indent=2))
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -512,6 +533,10 @@ def main() -> int:
         return cmd_deploy_release(args.release_name, args.environment, args.by, args.note)
     if args.command == "rollback-release":
         return cmd_rollback_release(args.release_name, args.environment, args.by, args.note)
+    if args.command == "list-releases":
+        return cmd_list_releases()
+    if args.command == "environment-status":
+        return cmd_environment_status(args.environment)
     parser.error("Unknown command")
     return 1
 

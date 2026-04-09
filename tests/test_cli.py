@@ -8,8 +8,10 @@ from pathlib import Path
 from agent_architect_lab.cli import (
     cmd_approve_release,
     cmd_deploy_release,
+    cmd_environment_status,
     cmd_explain_patterns,
     cmd_list_skills,
+    cmd_list_releases,
     cmd_promote_release,
     cmd_register_report,
     cmd_rollback_release,
@@ -167,3 +169,31 @@ def test_cmd_deploy_and_rollback_release(monkeypatch, tmp_path: Path) -> None:
     assert rollback_payload["deployments"][-1]["status"] == "rolled_back"
     assert status_exit == 0
     assert status_payload["deployments"][-1]["status"] == "active"
+
+
+def test_cmd_list_releases_and_environment_status(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
+        cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
+        cmd_approve_release("release-b", "qa-owner", "approved")
+        cmd_deploy_release("release-b", "staging", "release-manager", "deploy B")
+
+    releases_buffer = io.StringIO()
+    with redirect_stdout(releases_buffer):
+        releases_exit = cmd_list_releases()
+    releases_payload = json.loads(releases_buffer.getvalue())
+
+    env_buffer = io.StringIO()
+    with redirect_stdout(env_buffer):
+        env_exit = cmd_environment_status("staging")
+    env_payload = json.loads(env_buffer.getvalue())
+
+    assert releases_exit == 0
+    assert releases_payload[0]["release_name"] == "release-b"
+    assert env_exit == 0
+    assert env_payload["active_release"] == "release-b"

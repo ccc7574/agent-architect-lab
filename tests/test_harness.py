@@ -11,6 +11,8 @@ from agent_architect_lab.harness.ledger import (
     ReleaseLedger,
     build_release_manifest,
     deploy_release,
+    get_environment_status,
+    list_releases,
     record_release_candidate,
     rollback_release,
     transition_release,
@@ -571,3 +573,55 @@ def test_release_ledger_can_roll_back_and_reactivate_prior_release(tmp_path: Pat
     assert rolled_back_record.deployments[-1].status == "rolled_back"
     assert restored.deployments[-1].status == "active"
     assert restored.deployments[-1].reactivated_by == "release-manager"
+
+
+def test_list_releases_returns_newest_first(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-old", report_prefix="old", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-new", report_prefix="new", releases_dir=releases_dir)
+
+    records = list_releases(ledger_path=releases_dir / "release-ledger.json")
+
+    assert [record.release_name for record in records] == ["release-new", "release-old"]
+
+
+def test_environment_status_tracks_active_release(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-env-a", report_prefix="a", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-env-b", report_prefix="b", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-env-a", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-env-b", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release("release-env-a", environment="staging", actor="release-manager", note="deploy A", ledger_path=ledger_path)
+    deploy_release("release-env-b", environment="staging", actor="release-manager", note="deploy B", ledger_path=ledger_path)
+
+    before_rollback = get_environment_status("staging", ledger_path=ledger_path)
+    rollback_release("release-env-b", environment="staging", actor="release-manager", note="rollback B", ledger_path=ledger_path)
+    after_rollback = get_environment_status("staging", ledger_path=ledger_path)
+    empty = get_environment_status("production", ledger_path=ledger_path)
+
+    assert before_rollback.active_release == "release-env-b"
+    assert after_rollback.active_release == "release-env-a"
+    assert empty.status == "empty"

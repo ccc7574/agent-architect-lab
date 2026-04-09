@@ -87,6 +87,14 @@ Inspect current state and event history:
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
 ```
 
+Operator-oriented summary commands:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
+PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
+PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment production
+```
+
 ## Why This Matters
 
 Without this split, teams often lose the distinction between:

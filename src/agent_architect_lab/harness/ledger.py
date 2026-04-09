@@ -240,6 +240,24 @@ class ReleaseRecord:
 
 
 @dataclass(slots=True)
+class EnvironmentStatus:
+    environment: str
+    active_release: str | None
+    deployed_at: str | None
+    deployed_by: str | None
+    status: str
+
+    def to_dict(self) -> dict:
+        return {
+            "environment": self.environment,
+            "active_release": self.active_release,
+            "deployed_at": self.deployed_at,
+            "deployed_by": self.deployed_by,
+            "status": self.status,
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -262,6 +280,28 @@ class ReleaseLedger:
             if record.release_name == release_name:
                 return record
         raise KeyError(f"Unknown release '{release_name}'.")
+
+    def list_records(self) -> list[ReleaseRecord]:
+        return sorted(self.records, key=lambda item: item.created_at, reverse=True)
+
+    def environment_status(self, environment: str) -> EnvironmentStatus:
+        current_head = _current_environment_head(self.records, environment)
+        if current_head is None:
+            return EnvironmentStatus(
+                environment=environment,
+                active_release=None,
+                deployed_at=None,
+                deployed_by=None,
+                status="empty",
+            )
+        record, deployment = current_head
+        return EnvironmentStatus(
+            environment=environment,
+            active_release=record.release_name,
+            deployed_at=deployment.deployed_at,
+            deployed_by=deployment.deployed_by,
+            status=deployment.status,
+        )
 
     def create(self, manifest: ReleaseManifest, manifest_path: Path) -> ReleaseRecord:
         if any(record.release_name == manifest.release_name for record in self.records):
@@ -568,3 +608,11 @@ def rollback_release(
     record = ledger.rollback(release_name, environment, actor, note)
     ledger.save(ledger_path)
     return record
+
+
+def list_releases(*, ledger_path: Path) -> list[ReleaseRecord]:
+    return ReleaseLedger.load(ledger_path).list_records()
+
+
+def get_environment_status(environment: str, *, ledger_path: Path) -> EnvironmentStatus:
+    return ReleaseLedger.load(ledger_path).environment_status(environment)
