@@ -4,6 +4,7 @@ import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
+from re import sub
 
 from agent_architect_lab.agent.patterns import PATTERNS, recommend_pattern
 from agent_architect_lab.agent.runtime import AgentRuntime
@@ -207,6 +208,12 @@ def build_parser() -> argparse.ArgumentParser:
     operator_handoff_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
     operator_handoff_cmd.add_argument("--release-limit", type=int, default=20, help="Maximum number of releases to include in the risk board.")
     operator_handoff_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum number of overrides to include in override sections.")
+
+    record_handoff_cmd = subparsers.add_parser("record-operator-handoff", help="Generate and save an operator handoff snapshot under artifacts/handoffs.")
+    record_handoff_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
+    record_handoff_cmd.add_argument("--release-limit", type=int, default=20, help="Maximum number of releases to include in the risk board.")
+    record_handoff_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum number of overrides to include in override sections.")
+    record_handoff_cmd.add_argument("--label", default="", help="Optional label included in the saved file name.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -654,6 +661,34 @@ def cmd_operator_handoff(environments: list[str], release_limit: int, override_l
     return 0
 
 
+def cmd_record_operator_handoff(
+    environments: list[str],
+    release_limit: int,
+    override_limit: int,
+    label: str,
+) -> int:
+    settings = load_settings()
+    handoff = get_operator_handoff(
+        environments=environments or settings.environment_names,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        release_limit=release_limit,
+        override_limit=override_limit,
+    )
+    safe_label = sub(r"[^a-zA-Z0-9._-]+", "-", label.strip()).strip("-")
+    file_name = f"operator-handoff-{handoff.generated_at.replace(':', '').replace('+', '_')}"
+    if safe_label:
+        file_name += f"-{safe_label}"
+    output_path = settings.handoffs_dir / f"{file_name}.json"
+    output_path.write_text(json.dumps(handoff.to_dict(), indent=2), encoding="utf-8")
+    print(json.dumps({"saved_to": str(output_path), "handoff": handoff.to_dict()}, indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -805,6 +840,8 @@ def main() -> int:
         return cmd_override_review_board(args.release_name, args.environment, args.limit)
     if args.command == "operator-handoff":
         return cmd_operator_handoff(args.environments, args.release_limit, args.override_limit)
+    if args.command == "record-operator-handoff":
+        return cmd_record_operator_handoff(args.environments, args.release_limit, args.override_limit, args.label)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":
