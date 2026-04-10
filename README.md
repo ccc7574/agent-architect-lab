@@ -58,6 +58,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
+PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override 2026-04-10-main --environment production --blocker environment_frozen --by release-manager --note "incident closed"
@@ -163,9 +164,10 @@ Use `list-active-overrides` to audit currently effective overrides across releas
 Use `release-readiness-digest <release_name>` as the operator-facing summary view for a release. It condenses blocking environments, recommended actions, active overrides, and soon-to-expire overrides into one payload.
 Use `release-risk-board` to rank multiple recorded releases by operator risk so oncall can decide what to inspect first.
 Use `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to escalate long-idle releases into the risk board and handoff summary.
+Use `approval-review-board` plus `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to surface stale approval queues and releases still missing required approver roles.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
-Use `operator-handoff` to generate a combined shift handoff payload containing release risk, override remediation, active overrides, and a summary line for the next operator.
+Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, override remediation, active overrides, and a summary line for the next operator.
 Use `record-operator-handoff` to persist that handoff snapshot under `artifacts/handoffs` for shift-history and audit trails.
 Use `list-operator-handoffs` and `show-operator-handoff --latest` to review prior shift snapshots without manually opening artifact files.
 

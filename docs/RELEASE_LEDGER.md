@@ -156,6 +156,12 @@ Inspect a ranked risk board across recorded releases:
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 ```
 
+Inspect approval backlog and stale approval queues:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
+```
+
 Inspect override cleanup priority across releases:
 
 ```bash
@@ -227,6 +233,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli list-releases
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
+PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override 2026-04-10-main --environment production --blocker environment_frozen --by release-manager
@@ -247,9 +254,11 @@ Overrides are scoped to one release, one environment, and one exact blocker stri
 `release-readiness-digest` uses `AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES` to decide which overrides should be flagged as expiring soon. The default threshold is `120` minutes.
 `release-risk-board` ranks releases by unresolved environment blockers, expiring overrides, active override footprint, and stale update age so operators can focus on the riskiest release first.
 Set `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to control when a long-idle release is escalated into the risk board and handoff summary.
+`approval-review-board` tracks releases still waiting on first approval or missing required approver roles for the evaluated environments.
+Set `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to escalate long-idle approval queues.
 `override-review-board` ranks individual overrides into `expired`, `expiring_soon`, `active_no_expiry`, and `active`, with a remediation action for each row.
 `revoke-release-override` marks the latest matching override as revoked. Revoked overrides stop affecting readiness checks and stop appearing in active override views, but remain in `release-status` for audit history.
-`operator-handoff` packages the risk board, override review board, and active override list into a single shift handoff payload with a generated summary.
+`operator-handoff` packages the risk board, approval review board, override review board, and active override list into a single shift handoff payload with a generated summary.
 `record-operator-handoff` writes that payload to `artifacts/handoffs` so handoff state can be preserved between shifts.
 `list-operator-handoffs` provides a compact shift-history index, and `show-operator-handoff --latest` reloads the latest saved handoff without requiring operators to inspect the artifact directory manually.
 

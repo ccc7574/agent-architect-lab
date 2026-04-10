@@ -8,6 +8,7 @@ from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
+    get_approval_review_board,
     check_deploy_readiness,
     get_deploy_policy,
     get_environment_history,
@@ -1399,6 +1400,41 @@ def test_override_review_board_prioritizes_expired_and_expiring_entries(tmp_path
     assert board.rows[2].recommended_action == "add_override_expiry"
 
 
+def test_approval_review_board_prioritizes_stale_approval_backlog(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-awaiting-first", report_prefix="first", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-awaiting-role", report_prefix="role", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-awaiting-role", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+
+    board = get_approval_review_board(
+        environments=["staging", "production"],
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=["qa-owner", "release-manager"],
+        approval_stale_minutes=0,
+        limit=10,
+    )
+
+    rows = {row.release_name: row for row in board.rows}
+    assert rows["release-awaiting-first"].status == "awaiting_first_approval"
+    assert rows["release-awaiting-first"].risk_level == "high"
+    assert rows["release-awaiting-role"].status == "awaiting_required_roles"
+    assert rows["release-awaiting-role"].missing_roles == ["release-manager"]
+    assert rows["release-awaiting-role"].blocking_environments == ["production"]
+
+
 def test_operator_handoff_combines_release_and_override_views(tmp_path: Path) -> None:
     releases_dir = tmp_path / "releases"
     review = ReleaseShadowReview(
@@ -1443,11 +1479,13 @@ def test_operator_handoff_combines_release_and_override_views(tmp_path: Path) ->
         production_soak_minutes=0,
         required_approver_roles=["qa-owner", "release-manager"],
         override_expiring_soon_minutes=999999999,
+        approval_stale_minutes=0,
         release_limit=10,
         override_limit=10,
     )
 
     assert handoff.release_risk_board.rows[0].release_name == "release-high"
+    assert handoff.approval_review_board.rows[0].release_name == "release-high"
     assert handoff.override_review_board.rows[0].status == "expiring_soon"
     assert len(handoff.active_overrides) == 1
     assert "High-risk releases: release-high." in handoff.summary

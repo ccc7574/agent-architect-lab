@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from agent_architect_lab.cli import (
+    cmd_approval_review_board,
     cmd_approve_release,
     cmd_check_deploy_readiness,
     cmd_environment_history,
@@ -552,6 +553,35 @@ def test_cmd_release_risk_board_reports_ranked_rows(monkeypatch, tmp_path: Path)
     assert payload["rows"][1]["risk_level"] == "low"
 
 
+def test_cmd_approval_review_board_reports_backlog_and_staleness(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES", "0")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-awaiting-first", "", True, "", "release-awaiting-first")
+        cmd_run_release_shadow(["safety"], "release-awaiting-role", "", True, "", "release-awaiting-role")
+        cmd_approve_release("release-awaiting-role", "qa-owner", "", "approved")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_approval_review_board([], 10)
+    payload = json.loads(buffer.getvalue())
+    rows = {row["release_name"]: row for row in payload["rows"]}
+
+    assert exit_code == 0
+    assert payload["environments"] == ["staging", "production"]
+    assert rows["release-awaiting-first"]["status"] == "awaiting_first_approval"
+    assert rows["release-awaiting-first"]["risk_level"] == "high"
+    assert rows["release-awaiting-first"]["recommended_action"] == "escalate_release_review"
+    assert rows["release-awaiting-role"]["status"] == "awaiting_required_roles"
+    assert rows["release-awaiting-role"]["missing_roles"] == ["release-manager"]
+    assert rows["release-awaiting-role"]["blocking_environments"] == ["production"]
+    assert rows["release-awaiting-role"]["approved_roles"] == ["qa-owner"]
+
+
 def test_cmd_release_risk_board_flags_stale_release(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENTS", "staging")
@@ -653,6 +683,7 @@ def test_cmd_operator_handoff_reports_combined_shift_payload(monkeypatch, tmp_pa
 
     assert exit_code == 0
     assert payload["release_risk_board"]["rows"][0]["release_name"] == "release-high"
+    assert payload["approval_review_board"]["rows"][0]["release_name"] == "release-high"
     assert payload["override_review_board"]["rows"][0]["status"] == "expiring_soon"
     assert len(payload["active_overrides"]) == 1
     assert "High-risk releases: release-high." in payload["summary"]
@@ -719,6 +750,7 @@ def test_cmd_list_operator_handoffs_reports_latest_first(monkeypatch, tmp_path: 
     assert payload["rows"][0]["file_name"] == Path(second_payload["saved_to"]).name
     assert payload["rows"][1]["file_name"] == Path(first_payload["saved_to"]).name
     assert payload["rows"][0]["high_risk_releases"] == ["release-high"]
+    assert payload["rows"][0]["approval_review_count"] == 1
     assert payload["rows"][0]["active_override_count"] == 1
 
 

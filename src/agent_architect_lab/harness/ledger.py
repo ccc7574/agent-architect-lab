@@ -559,6 +559,52 @@ class ReleaseRiskBoard:
 
 
 @dataclass(slots=True)
+class ApprovalReviewBoardRow:
+    release_name: str
+    release_state: str
+    status: str
+    risk_level: str
+    approved_roles: list[str] = field(default_factory=list)
+    missing_roles: list[str] = field(default_factory=list)
+    blocking_environments: list[str] = field(default_factory=list)
+    approval_count: int = 0
+    latest_approval_at: str | None = None
+    is_stale: bool = False
+    minutes_since_update: int = 0
+    recommended_action: str = "observe_approvals"
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "release_name": self.release_name,
+            "release_state": self.release_state,
+            "status": self.status,
+            "risk_level": self.risk_level,
+            "approved_roles": self.approved_roles,
+            "missing_roles": self.missing_roles,
+            "blocking_environments": self.blocking_environments,
+            "approval_count": self.approval_count,
+            "latest_approval_at": self.latest_approval_at,
+            "is_stale": self.is_stale,
+            "minutes_since_update": self.minutes_since_update,
+            "recommended_action": self.recommended_action,
+            "summary": self.summary,
+        }
+
+
+@dataclass(slots=True)
+class ApprovalReviewBoard:
+    environments: list[str]
+    rows: list[ApprovalReviewBoardRow] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "environments": self.environments,
+            "rows": [row.to_dict() for row in self.rows],
+        }
+
+
+@dataclass(slots=True)
 class OverrideReviewBoardRow:
     release_name: str
     environment: str
@@ -603,6 +649,7 @@ class OperatorHandoff:
     generated_at: str
     environments: list[str]
     release_risk_board: ReleaseRiskBoard
+    approval_review_board: ApprovalReviewBoard
     override_review_board: OverrideReviewBoard
     active_overrides: list[ActiveOverrideEntry] = field(default_factory=list)
     summary: str = ""
@@ -612,6 +659,7 @@ class OperatorHandoff:
             "generated_at": self.generated_at,
             "environments": self.environments,
             "release_risk_board": self.release_risk_board.to_dict(),
+            "approval_review_board": self.approval_review_board.to_dict(),
             "override_review_board": self.override_review_board.to_dict(),
             "active_overrides": [entry.to_dict() for entry in self.active_overrides],
             "summary": self.summary,
@@ -995,6 +1043,93 @@ class ReleaseLedger:
         )
         return OverrideReviewBoard(rows=rows[:limit])
 
+    def approval_review_board(
+        self,
+        *,
+        environments: list[str],
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
+        environment_freeze_windows: dict[str, list[str]],
+        approval_stale_minutes: int,
+        limit: int,
+    ) -> ApprovalReviewBoard:
+        rows: list[ApprovalReviewBoardRow] = []
+        for record in self.list_records()[:limit]:
+            matrix = self.rollout_matrix(
+                environments,
+                release_name=record.release_name,
+                production_soak_minutes=production_soak_minutes,
+                required_approver_roles=required_approver_roles,
+                environment_policies=environment_policies,
+                environment_freeze_windows=environment_freeze_windows,
+            )
+            blocking_environments: list[str] = []
+            missing_roles: set[str] = set()
+            for row in matrix.rows:
+                readiness = row.readiness
+                if readiness is None:
+                    continue
+                blockers = readiness.blockers
+                missing_for_environment: list[str] = []
+                for blocker in blockers:
+                    if not blocker.startswith("missing_required_approvals:"):
+                        continue
+                    missing_for_environment.extend(
+                        role
+                        for role in blocker.split(":", 1)[1].split(",")
+                        if role
+                    )
+                if missing_for_environment:
+                    blocking_environments.append(row.environment)
+                    missing_roles.update(missing_for_environment)
+
+            if record.state != "pending_approval" and not missing_roles:
+                continue
+
+            approved_roles = sorted({approval.role for approval in record.approvals})
+            latest_approval_at = (
+                max((approval.timestamp for approval in record.approvals), default=None)
+            )
+            minutes_since_update = _minutes_since(record.last_updated_at)
+            is_stale = minutes_since_update >= approval_stale_minutes if approval_stale_minutes >= 0 else False
+            status = _approval_review_status(
+                release_state=record.state,
+                missing_roles=sorted(missing_roles),
+            )
+            rows.append(
+                ApprovalReviewBoardRow(
+                    release_name=record.release_name,
+                    release_state=record.state,
+                    status=status,
+                    risk_level=_approval_review_risk_level(status, is_stale=is_stale),
+                    approved_roles=approved_roles,
+                    missing_roles=sorted(missing_roles),
+                    blocking_environments=blocking_environments,
+                    approval_count=len(record.approvals),
+                    latest_approval_at=latest_approval_at,
+                    is_stale=is_stale,
+                    minutes_since_update=minutes_since_update,
+                    recommended_action=_approval_review_action(status, is_stale=is_stale),
+                    summary=_build_approval_review_summary(
+                        release_name=record.release_name,
+                        status=status,
+                        blocking_environments=blocking_environments,
+                        missing_roles=sorted(missing_roles),
+                    ),
+                )
+            )
+        rows.sort(
+            key=lambda row: (
+                _approval_review_rank(row.risk_level),
+                row.is_stale,
+                row.minutes_since_update,
+                row.release_name,
+            ),
+            reverse=True,
+        )
+        return ApprovalReviewBoard(environments=list(environments), rows=rows[:limit])
+
     def operator_handoff(
         self,
         *,
@@ -1005,6 +1140,7 @@ class ReleaseLedger:
         environment_freeze_windows: dict[str, list[str]],
         override_expiring_soon_minutes: int,
         release_stale_minutes: int,
+        approval_stale_minutes: int,
         release_limit: int,
         override_limit: int,
     ) -> OperatorHandoff:
@@ -1018,6 +1154,15 @@ class ReleaseLedger:
             release_stale_minutes=release_stale_minutes,
             limit=release_limit,
         )
+        approval_review_board = self.approval_review_board(
+            environments=environments,
+            production_soak_minutes=production_soak_minutes,
+            required_approver_roles=required_approver_roles,
+            environment_policies=environment_policies,
+            environment_freeze_windows=environment_freeze_windows,
+            approval_stale_minutes=approval_stale_minutes,
+            limit=release_limit,
+        )
         override_review_board = self.override_review_board(
             override_expiring_soon_minutes=override_expiring_soon_minutes,
             limit=override_limit,
@@ -1025,12 +1170,14 @@ class ReleaseLedger:
         active_overrides = self.active_overrides(limit=override_limit)
         summary = _build_operator_handoff_summary(
             release_risk_board=release_risk_board,
+            approval_review_board=approval_review_board,
             override_review_board=override_review_board,
         )
         return OperatorHandoff(
             generated_at=utc_now_iso(),
             environments=list(environments),
             release_risk_board=release_risk_board,
+            approval_review_board=approval_review_board,
             override_review_board=override_review_board,
             active_overrides=active_overrides,
             summary=summary,
@@ -1603,6 +1750,58 @@ def _override_review_risk_level(status: str) -> str:
     return "low"
 
 
+def _approval_review_rank(risk_level: str) -> int:
+    return {"high": 2, "medium": 1, "low": 0}.get(risk_level, -1)
+
+
+def _approval_review_status(release_state: str, *, missing_roles: list[str]) -> str:
+    if release_state == "pending_approval":
+        return "awaiting_first_approval"
+    if missing_roles:
+        return "awaiting_required_roles"
+    return "approval_satisfied"
+
+
+def _approval_review_risk_level(status: str, *, is_stale: bool) -> str:
+    if is_stale:
+        return "high"
+    if status in {"awaiting_first_approval", "awaiting_required_roles"}:
+        return "medium"
+    return "low"
+
+
+def _approval_review_action(status: str, *, is_stale: bool) -> str:
+    if is_stale:
+        return "escalate_release_review"
+    if status == "awaiting_first_approval":
+        return "assign_first_approver"
+    if status == "awaiting_required_roles":
+        return "collect_required_approvals"
+    return "observe_approvals"
+
+
+def _build_approval_review_summary(
+    *,
+    release_name: str,
+    status: str,
+    blocking_environments: list[str],
+    missing_roles: list[str],
+) -> str:
+    if status == "awaiting_first_approval":
+        if missing_roles:
+            return (
+                f"Release '{release_name}' still lacks an initial approval and is missing roles "
+                + ", ".join(missing_roles)
+                + "."
+            )
+        return f"Release '{release_name}' is waiting for its first approval."
+    if status == "awaiting_required_roles":
+        environments = ", ".join(blocking_environments) or "evaluated environments"
+        roles = ", ".join(missing_roles) or "required roles"
+        return f"Release '{release_name}' is missing approval roles {roles} for {environments}."
+    return f"Release '{release_name}' has satisfied the tracked approval requirements."
+
+
 def _override_review_action(status: str) -> str:
     if status == "expired":
         return "remove_or_renew_override"
@@ -1714,10 +1913,13 @@ def _release_is_stale(
 def _build_operator_handoff_summary(
     *,
     release_risk_board: ReleaseRiskBoard,
+    approval_review_board: ApprovalReviewBoard,
     override_review_board: OverrideReviewBoard,
 ) -> str:
     high_risk_releases = [row.release_name for row in release_risk_board.rows if row.risk_level == "high"]
     stale_releases = [row.release_name for row in release_risk_board.rows if row.is_stale]
+    stale_approval_releases = [row.release_name for row in approval_review_board.rows if row.is_stale]
+    pending_approval_releases = [row.release_name for row in approval_review_board.rows]
     expired_overrides = [row for row in override_review_board.rows if row.status == "expired"]
     expiring_overrides = [row for row in override_review_board.rows if row.status == "expiring_soon"]
     if high_risk_releases:
@@ -1726,6 +1928,10 @@ def _build_operator_handoff_summary(
         summary = "No high-risk releases in the current handoff window."
     if stale_releases:
         summary += " Stale releases: " + ", ".join(stale_releases) + "."
+    if stale_approval_releases:
+        summary += " Stale approval queues: " + ", ".join(stale_approval_releases) + "."
+    elif pending_approval_releases:
+        summary += f" {len(pending_approval_releases)} release(s) still await approval actions."
     if expired_overrides:
         summary += f" {len(expired_overrides)} override(s) already expired."
     if expiring_overrides:
@@ -2050,6 +2256,29 @@ def get_release_risk_board(
     )
 
 
+def get_approval_review_board(
+    *,
+    environments: list[str],
+    ledger_path: Path,
+    production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
+    approval_stale_minutes: int = 120,
+    limit: int = 20,
+) -> ApprovalReviewBoard:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.approval_review_board(
+        environments=list(environments),
+        production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
+        approval_stale_minutes=approval_stale_minutes,
+        limit=limit,
+    )
+
+
 def get_override_review_board(
     *,
     ledger_path: Path,
@@ -2077,6 +2306,7 @@ def get_operator_handoff(
     environment_freeze_windows: dict[str, list[str]] | None = None,
     override_expiring_soon_minutes: int = 120,
     release_stale_minutes: int = 240,
+    approval_stale_minutes: int = 120,
     release_limit: int = 20,
     override_limit: int = 50,
 ) -> OperatorHandoff:
@@ -2089,6 +2319,7 @@ def get_operator_handoff(
         environment_freeze_windows=dict(environment_freeze_windows or {}),
         override_expiring_soon_minutes=override_expiring_soon_minutes,
         release_stale_minutes=release_stale_minutes,
+        approval_stale_minutes=approval_stale_minutes,
         release_limit=release_limit,
         override_limit=override_limit,
     )

@@ -111,6 +111,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 ```
 
+查看审批积压与陈旧审批队列：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
+```
+
 查看 override 整改优先级看板：
 
 ```bash
@@ -334,6 +340,24 @@ override 只用于紧急场景，不应该替代正常流程。
 
 它的目标不是替代 `release-readiness-digest`，而是帮助值班人员先决定“先看哪个 release”。
 
+## approval review board
+
+`approval-review-board` 是面向审批治理的 backlog 看板。
+
+它主要回答两类问题：
+
+- 哪些 release 还在等待第一位审批人介入
+- 哪些 release 已有部分审批，但对目标环境仍然缺少关键 approver role
+
+它会同时给出：
+
+- `missing_roles`
+- `blocking_environments`
+- `recommended_action`
+- 是否已经 stale
+
+可以通过 `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` 控制审批队列多久未更新后升级为高风险。
+
 ## override review board
 
 `override-review-board` 是面向治理和整改的 override 专项看板。
@@ -369,6 +393,7 @@ override 只用于紧急场景，不应该替代正常流程。
 它会把以下内容合并到一份 payload 中：
 
 - `release-risk-board`
+- `approval-review-board`
 - `override-review-board`
 - 当前生效的 `active_overrides`
 - 一条面向下一位值班人员的 summary

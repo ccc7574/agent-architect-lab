@@ -14,6 +14,7 @@ from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import save_incident_suggestions, suggest_incident_evals
 from agent_architect_lab.harness.ledger import (
+    get_approval_review_board,
     check_deploy_readiness,
     deploy_release,
     get_environment_history,
@@ -198,6 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
     risk_board_cmd = subparsers.add_parser("release-risk-board", help="Show a ranked operator board across recorded releases.")
     risk_board_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
     risk_board_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of releases to include.")
+
+    approval_review_board_cmd = subparsers.add_parser("approval-review-board", help="Show release approval backlog and stale approval queues across environments.")
+    approval_review_board_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
+    approval_review_board_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of releases to include.")
 
     override_review_board_cmd = subparsers.add_parser("override-review-board", help="Show override remediation priority across recorded releases.")
     override_review_board_cmd.add_argument("--release-name", default="", help="Optional release filter.")
@@ -639,6 +644,22 @@ def cmd_release_risk_board(environments: list[str], limit: int) -> int:
     return 0
 
 
+def cmd_approval_review_board(environments: list[str], limit: int) -> int:
+    settings = load_settings()
+    board = get_approval_review_board(
+        environments=environments or settings.environment_names,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        approval_stale_minutes=settings.approval_stale_minutes,
+        limit=limit,
+    )
+    print(json.dumps(board.to_dict(), indent=2))
+    return 0
+
+
 def cmd_override_review_board(release_name: str, environment: str, limit: int) -> int:
     settings = load_settings()
     board = get_override_review_board(
@@ -663,6 +684,7 @@ def cmd_operator_handoff(environments: list[str], release_limit: int, override_l
         environment_freeze_windows=settings.environment_freeze_windows,
         override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
         release_stale_minutes=settings.release_stale_minutes,
+        approval_stale_minutes=settings.approval_stale_minutes,
         release_limit=release_limit,
         override_limit=override_limit,
     )
@@ -686,6 +708,7 @@ def cmd_record_operator_handoff(
         environment_freeze_windows=settings.environment_freeze_windows,
         override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
         release_stale_minutes=settings.release_stale_minutes,
+        approval_stale_minutes=settings.approval_stale_minutes,
         release_limit=release_limit,
         override_limit=override_limit,
     )
@@ -722,6 +745,7 @@ def _build_operator_handoff_history_row(path: Path, payload: dict) -> dict:
         "environments": payload.get("environments", []),
         "release_count": len(release_rows),
         "high_risk_releases": high_risk_releases,
+        "approval_review_count": len(payload.get("approval_review_board", {}).get("rows", [])),
         "override_review_count": len(payload.get("override_review_board", {}).get("rows", [])),
         "active_override_count": len(payload.get("active_overrides", [])),
         "summary": payload.get("summary", ""),
@@ -910,6 +934,8 @@ def main() -> int:
         return cmd_release_readiness_digest(args.release_name, args.environments)
     if args.command == "release-risk-board":
         return cmd_release_risk_board(args.environments, args.limit)
+    if args.command == "approval-review-board":
+        return cmd_approval_review_board(args.environments, args.limit)
     if args.command == "override-review-board":
         return cmd_override_review_board(args.release_name, args.environment, args.limit)
     if args.command == "operator-handoff":
