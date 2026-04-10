@@ -1564,3 +1564,32 @@ def test_incident_cannot_close_before_resolution(tmp_path: Path) -> None:
         assert "Cannot transition incident" in str(exc)
     else:
         raise AssertionError("Expected direct incident closure to be rejected before resolution.")
+
+
+def test_incident_cannot_close_without_followup_eval(tmp_path: Path) -> None:
+    incidents_dir = tmp_path / "incidents"
+    ledger_path = default_incident_ledger_path(incidents_dir)
+    opened = open_incident(
+        severity="high",
+        summary="staging instability",
+        owner="incident-commander",
+        ledger_path=ledger_path,
+    )
+    transition_incident(
+        opened.incident_id,
+        status="resolved",
+        actor="incident-commander",
+        ledger_path=ledger_path,
+    )
+
+    try:
+        transition_incident(
+            opened.incident_id,
+            status="closed",
+            actor="incident-commander",
+            ledger_path=ledger_path,
+        )
+    except ValueError as exc:
+        assert "follow-up eval artifact" in str(exc)
+    else:
+        raise AssertionError("Expected incident closure to require a linked follow-up eval.")

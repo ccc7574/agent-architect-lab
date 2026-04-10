@@ -124,6 +124,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_incident_report_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/incidents/<incident_id>.md.")
     export_incident_report_cmd.add_argument("--title", default="", help="Optional report title override.")
 
+    export_incident_bundle_cmd = subparsers.add_parser("export-incident-bundle", help="Export an incident bundle with incident report, release context, and related handoff artifacts.")
+    export_incident_bundle_cmd.add_argument("incident_id", help="Incident identifier.")
+    export_incident_bundle_cmd.add_argument("--output-dir", default="", help="Optional output directory. Defaults to artifacts/incidents/bundles/<incident_id>.")
+
     incident_review_board_cmd = subparsers.add_parser("incident-review-board", help="Show unresolved incident priority and stale incident queues.")
     incident_review_board_cmd.add_argument("--status", default="", choices=["", "open", "acknowledged", "contained", "resolved", "closed"], help="Optional status filter.")
     incident_review_board_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of incidents to return.")
@@ -430,6 +434,83 @@ def cmd_export_incident_report(incident_id: str, output: str, title: str) -> int
     report_title = title.strip() or f"Incident Report: {incident_id}"
     output_path.write_text(_render_incident_markdown(record, title=report_title), encoding="utf-8")
     print(json.dumps({"saved_to": str(output_path), "incident_id": incident_id, "title": report_title}, indent=2))
+    return 0
+
+
+def _find_related_handoff_snapshot_for_incident(settings, incident_record: dict) -> tuple[Path, dict] | None:
+    release_name = incident_record.get("release_name")
+    incident_id = incident_record.get("incident_id")
+    for path, payload in _load_operator_handoff_snapshots(settings.handoffs_dir):
+        active_incidents = payload.get("active_incidents", [])
+        if any(item.get("incident_id") == incident_id for item in active_incidents):
+            return path, payload
+        if release_name and any(item.get("release_name") == release_name for item in active_incidents):
+            return path, payload
+        release_rows = payload.get("release_risk_board", {}).get("rows", [])
+        if release_name and any(row.get("release_name") == release_name for row in release_rows):
+            return path, payload
+    return None
+
+
+def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
+    settings = load_settings()
+    incident_record = get_incident_record(incident_id, ledger_path=settings.incident_ledger_path).to_dict()
+    bundle_dir = Path(output_dir) if output_dir else settings.incidents_dir / "bundles" / incident_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    incident_report_path = bundle_dir / "incident-report.md"
+    incident_report_path.write_text(
+        _render_incident_markdown(incident_record, title=f"Incident Report: {incident_id}"),
+        encoding="utf-8",
+    )
+
+    release_record = None
+    if incident_record.get("release_name"):
+        try:
+            release_record = get_release_record(
+                incident_record["release_name"],
+                ledger_path=settings.release_ledger_path,
+            ).to_dict()
+        except KeyError:
+            release_record = None
+
+    related_handoff = _find_related_handoff_snapshot_for_incident(settings, incident_record)
+    handoff_snapshot_path = None
+    handoff_report_path = None
+    if related_handoff is not None:
+        handoff_snapshot_path, handoff_payload = related_handoff
+        handoff_report_path = bundle_dir / "handoff-report.md"
+        handoff_report_path.write_text(
+            _render_operator_handoff_markdown(
+                handoff_payload,
+                title=f"Operator Handoff For {incident_id}",
+            ),
+            encoding="utf-8",
+        )
+
+    manifest = {
+        "incident": incident_record,
+        "incident_report_path": str(incident_report_path),
+        "source_report_path": incident_record.get("source_report_path"),
+        "followup_eval_path": incident_record.get("followup_eval_path"),
+        "release_record": release_record,
+        "related_handoff_snapshot_path": str(handoff_snapshot_path) if handoff_snapshot_path else None,
+        "related_handoff_report_path": str(handoff_report_path) if handoff_report_path else None,
+    }
+    manifest_path = bundle_dir / "bundle-manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "saved_to": str(bundle_dir),
+                "incident_id": incident_id,
+                "bundle_manifest": str(manifest_path),
+                "incident_report_path": str(incident_report_path),
+                "handoff_report_path": str(handoff_report_path) if handoff_report_path else None,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1300,6 +1381,8 @@ def main() -> int:
         return cmd_incident_status(args.incident_id)
     if args.command == "export-incident-report":
         return cmd_export_incident_report(args.incident_id, args.output, args.title)
+    if args.command == "export-incident-bundle":
+        return cmd_export_incident_bundle(args.incident_id, args.output_dir)
     if args.command == "incident-review-board":
         return cmd_incident_review_board(args.status, args.limit)
     if args.command == "evaluate-promotion":

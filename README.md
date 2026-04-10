@@ -47,6 +47,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli incident-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident incident-202604... --status contained --by incident-commander --note "rollback complete" --followup-eval-path ./incident-backfill.jsonl
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-incidents --status open
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-202604... --title "Incident Rollback Report"
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle incident-202604...
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval approval_simulation --report-prefix release-candidate --suite-aware-defaults --output-backfill-dir ./release-backfills
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --baseline-manifest ./baseline-manifest.json --report-prefix release-candidate --suite-aware-defaults
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --report-prefix release-candidate --suite-aware-defaults --release-name 2026-04-10-main
@@ -176,6 +177,7 @@ Use `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to escalate long-idle releases i
 Use `approval-review-board` plus `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to surface stale approval queues and releases still missing required approver roles.
 Use `open-incident`, `transition-incident`, `list-incidents`, and `incident-review-board` to run a basic incident command workflow with ownership, status, and follow-up eval linkage.
 Use `export-incident-report` to render one incident into a readable Markdown artifact for postmortems or stakeholder updates.
+Use `export-incident-bundle` to package the incident, linked release state, and related handoff artifacts into one export directory.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.

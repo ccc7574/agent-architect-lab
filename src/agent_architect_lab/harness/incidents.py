@@ -235,6 +235,9 @@ class IncidentLedger:
     ) -> IncidentRecord:
         record = self.get(incident_id)
         _validate_incident_transition(record.status, status)
+        next_followup_eval_path = followup_eval_path or record.followup_eval_path
+        if status == "closed" and not next_followup_eval_path:
+            raise ValueError("Cannot close incident without a linked follow-up eval artifact.")
         timestamp = utc_now_iso()
         previous_status = record.status
         record.status = status

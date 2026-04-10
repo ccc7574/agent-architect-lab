@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_incident_review_board,
     cmd_incident_status,
     cmd_export_incident_report,
+    cmd_export_incident_bundle,
     cmd_grant_release_override,
     cmd_list_incidents,
     cmd_list_active_overrides,
@@ -199,6 +200,46 @@ def test_cmd_export_incident_report_writes_markdown(monkeypatch, tmp_path: Path)
     assert "# Incident Rollback Report" in markdown
     assert "## Timeline" in markdown
     assert "staging rollback triggered" in markdown
+
+
+def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+
+    open_buffer = io.StringIO()
+    with redirect_stdout(open_buffer):
+        open_exit = cmd_open_incident(
+            "high",
+            "staging rollback triggered",
+            "incident-commander",
+            "staging",
+            "release-a",
+            "/tmp/report.json",
+            "triage started",
+        )
+    open_payload = json.loads(open_buffer.getvalue())
+
+    with redirect_stdout(io.StringIO()):
+        cmd_record_operator_handoff([], 10, 10, "incident-shift")
+
+    bundle_buffer = io.StringIO()
+    with redirect_stdout(bundle_buffer):
+        bundle_exit = cmd_export_incident_bundle(open_payload["incident_id"], "")
+    bundle_payload = json.loads(bundle_buffer.getvalue())
+    bundle_dir = Path(bundle_payload["saved_to"])
+    manifest = json.loads((bundle_dir / "bundle-manifest.json").read_text(encoding="utf-8"))
+
+    assert open_exit == 0
+    assert bundle_exit == 0
+    assert (bundle_dir / "incident-report.md").exists()
+    assert manifest["incident"]["incident_id"] == open_payload["incident_id"]
+    assert manifest["release_record"]["release_name"] == "release-a"
+    assert manifest["related_handoff_snapshot_path"] is not None
+    assert manifest["related_handoff_report_path"] is not None
 
 
 def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, tmp_path: Path) -> None:
