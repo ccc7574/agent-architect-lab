@@ -59,6 +59,7 @@ Default role policy keys:
 - `read_storage`
 - `create_export_job`
 - `manage_storage`
+- `restore_storage`
 - `retry_job`
 - `approve_release`
 - `reject_release`
@@ -111,6 +112,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
 - `POST /jobs/backup-control-plane-storage`
+- `POST /jobs/verify-control-plane-backup`
+- `POST /jobs/restore-control-plane-backup`
 - `POST /jobs/{job_id}/retry`
 
 ## Example Requests
@@ -253,6 +256,41 @@ curl \
   -d '{
     "label": "nightly",
     "output": "/tmp/control-plane-nightly.zip"
+  }'
+```
+
+Queue a backup verification job:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: ops-oncall-1" \
+  -H "X-Control-Plane-Role: ops-oncall" \
+  -H "Idempotency-Key: verify-control-plane-backup-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/verify-control-plane-backup \
+  -d '{
+    "backup_path": "/tmp/control-plane-nightly.zip",
+    "expected_sha256": "abc123..."
+  }'
+```
+
+Queue a restore drill from a backup archive:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: ops-oncall-1" \
+  -H "X-Control-Plane-Role: ops-oncall" \
+  -H "Idempotency-Key: restore-control-plane-backup-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/restore-control-plane-backup \
+  -d '{
+    "backup_path": "/tmp/control-plane-nightly.zip",
+    "output_dir": "/tmp/control-plane-restore-drill",
+    "label": "drill"
   }'
 ```
 

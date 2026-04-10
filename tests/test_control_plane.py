@@ -15,8 +15,10 @@ from agent_architect_lab.cli import (
     cmd_control_plane_storage_status,
     cmd_approve_release,
     cmd_open_incident,
+    cmd_restore_control_plane_backup,
     cmd_run_evals,
     cmd_run_release_shadow,
+    cmd_verify_control_plane_backup,
 )
 from agent_architect_lab.config import load_settings
 from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
@@ -1138,3 +1140,182 @@ def test_control_plane_storage_cli_status_and_backup(monkeypatch, tmp_path: Path
     with zipfile.ZipFile(backup_path) as archive:
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
     assert manifest["backend"] == "sqlite"
+
+
+def test_control_plane_backup_cli_verify_and_restore(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+
+    backup_stdout = io.StringIO()
+    backup_path = tmp_path / "verify-restore-control-plane.zip"
+    with redirect_stdout(backup_stdout):
+        assert cmd_backup_control_plane_storage(str(backup_path), "verify-restore") == 0
+    backup_payload = json.loads(backup_stdout.getvalue())
+
+    verify_stdout = io.StringIO()
+    with redirect_stdout(verify_stdout):
+        assert cmd_verify_control_plane_backup(str(backup_path), backup_payload["sha256"]) == 0
+    verify_payload = json.loads(verify_stdout.getvalue())
+
+    restore_stdout = io.StringIO()
+    restore_dir = tmp_path / "restore-drill"
+    with redirect_stdout(restore_stdout):
+        assert cmd_restore_control_plane_backup(str(backup_path), str(restore_dir), "drill") == 0
+    restore_payload = json.loads(restore_stdout.getvalue())
+
+    assert verify_payload["validated"] is True
+    assert verify_payload["archive_sha256"] == backup_payload["sha256"]
+    assert verify_payload["backend"] == "sqlite"
+    assert restore_payload["backend"] == "sqlite"
+    assert restore_payload["validation"]["validated"] is True
+    assert (restore_dir / "manifest.json").exists()
+    assert any(name.endswith(".sqlite3") for name in restore_payload["restored_files"])
+
+
+def test_control_plane_server_runs_backup_verify_and_restore_jobs(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        backup_archive = tmp_path / "ops-backup.zip"
+        connection.request(
+            "POST",
+            "/jobs/backup-control-plane-storage",
+            body=json.dumps({"output": str(backup_archive), "label": "ops"}),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="backup-control-plane-storage-verify-restore-1",
+                ),
+            },
+        )
+        backup_response = connection.getresponse()
+        backup_payload = json.loads(backup_response.read().decode("utf-8"))
+        backup_job_id = backup_payload["job_id"]
+
+        backup_job = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{backup_job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                backup_job = job_payload
+                break
+
+        backup_result_path = backup_job["result_payload"]["saved_to"] if backup_job is not None else str(backup_archive)
+        backup_sha = backup_job["result_payload"]["sha256"] if backup_job is not None else ""
+
+        connection.request(
+            "POST",
+            "/jobs/verify-control-plane-backup",
+            body=json.dumps({"backup_path": backup_result_path, "expected_sha256": backup_sha}),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="verify-control-plane-backup-1",
+                ),
+            },
+        )
+        verify_response = connection.getresponse()
+        verify_payload = json.loads(verify_response.read().decode("utf-8"))
+        verify_job_id = verify_payload["job_id"]
+
+        verify_job = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{verify_job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                verify_job = job_payload
+                break
+
+        restore_dir = tmp_path / "restore-job"
+        connection.request(
+            "POST",
+            "/jobs/restore-control-plane-backup",
+            body=json.dumps(
+                {
+                    "backup_path": backup_result_path,
+                    "output_dir": str(restore_dir),
+                    "label": "restore-job",
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="restore-control-plane-backup-1",
+                ),
+            },
+        )
+        restore_response = connection.getresponse()
+        restore_payload = json.loads(restore_response.read().decode("utf-8"))
+        restore_job_id = restore_payload["job_id"]
+
+        restore_job = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{restore_job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                restore_job = job_payload
+                break
+        connection.close()
+
+        assert backup_response.status == 202
+        assert backup_job is not None
+        assert Path(backup_result_path).exists()
+        assert verify_response.status == 202
+        assert verify_job is not None
+        assert verify_job["result_payload"]["validated"] is True
+        assert verify_job["result_payload"]["archive_sha256"] == backup_sha
+        assert restore_response.status == 202
+        assert restore_job is not None
+        assert restore_job["result_payload"]["validation"]["validated"] is True
+        assert Path(restore_job["result_payload"]["restored_to"]).exists()
+        assert (restore_dir / "manifest.json").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

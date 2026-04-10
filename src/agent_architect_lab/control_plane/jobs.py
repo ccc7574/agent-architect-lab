@@ -9,7 +9,11 @@ from typing import Any, Callable, Protocol, runtime_checkable
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings
-from agent_architect_lab.control_plane.maintenance import backup_control_plane_storage
+from agent_architect_lab.control_plane.maintenance import (
+    backup_control_plane_storage,
+    restore_control_plane_backup,
+    verify_control_plane_backup,
+)
 from agent_architect_lab.control_plane.reporting import (
     export_governance_summary_report,
     export_operator_handoff_report,
@@ -351,6 +355,8 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "record_operator_handoff": _handle_record_operator_handoff,
         "export_operator_handoff_report": _handle_export_operator_handoff_report,
         "backup_control_plane_storage": _handle_backup_control_plane_storage,
+        "verify_control_plane_backup": _handle_verify_control_plane_backup,
+        "restore_control_plane_backup": _handle_restore_control_plane_backup,
     }
 
 
@@ -391,6 +397,22 @@ def _handle_backup_control_plane_storage(settings: Settings, payload: JobPayload
     return backup_control_plane_storage(
         settings,
         output=str(payload.get("output", "")),
+        label=str(payload.get("label", "")),
+    )
+
+
+def _handle_verify_control_plane_backup(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return verify_control_plane_backup(
+        str(payload.get("backup_path", "")),
+        expected_sha256=str(payload.get("expected_sha256", "")),
+    )
+
+
+def _handle_restore_control_plane_backup(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return restore_control_plane_backup(
+        settings,
+        backup_path=str(payload.get("backup_path", "")),
+        output_dir=str(payload.get("output_dir", "")),
         label=str(payload.get("label", "")),
     )
 

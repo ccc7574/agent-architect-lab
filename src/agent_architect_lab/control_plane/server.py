@@ -430,6 +430,55 @@ class ControlPlaneApp:
                         success_status_code=202,
                     )
                 )
+            if method == "POST" and path == "/jobs/verify-control-plane-backup":
+                authorization, auth_error = authorize("write", "manage_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="verify_control_plane_backup",
+                            payload={
+                                "backup_path": _required_string(payload, "backup_path"),
+                                "expected_sha256": _optional_string(payload, "expected_sha256") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/restore-control-plane-backup":
+                authorization, auth_error = authorize("write", "restore_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="restore_control_plane_backup",
+                            payload={
+                                "backup_path": _required_string(payload, "backup_path"),
+                                "output_dir": _optional_string(payload, "output_dir") or "",
+                                "label": _optional_string(payload, "label") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
             release_approve_match = re.fullmatch(r"/releases/([^/]+)/approve", path)
             if method == "POST" and release_approve_match is not None:
                 authorization, auth_error = authorize("write", "approve_release")
@@ -1253,6 +1302,10 @@ def _route_policy_key_for_path(method: str, path: str) -> str:
             return "create_export_job"
         if path == "/jobs/backup-control-plane-storage":
             return "manage_storage"
+        if path == "/jobs/verify-control-plane-backup":
+            return "manage_storage"
+        if path == "/jobs/restore-control-plane-backup":
+            return "restore_storage"
         if re.fullmatch(r"/jobs/[^/]+/retry", path):
             return "retry_job"
         if path == "/incidents/open":

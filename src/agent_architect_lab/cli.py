@@ -12,6 +12,8 @@ from agent_architect_lab.config import load_settings
 from agent_architect_lab.control_plane.maintenance import (
     backup_control_plane_storage,
     build_control_plane_storage_status,
+    restore_control_plane_backup,
+    verify_control_plane_backup,
 )
 from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.control_plane.server import (
@@ -97,6 +99,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backup_control_plane_storage_cmd.add_argument("--output", default="", help="Optional output zip path.")
     backup_control_plane_storage_cmd.add_argument("--label", default="", help="Optional label added to the backup file name.")
+    verify_control_plane_backup_cmd = subparsers.add_parser(
+        "verify-control-plane-backup",
+        help="Verify a control-plane storage backup archive and inspect its manifest.",
+    )
+    verify_control_plane_backup_cmd.add_argument("backup_path", help="Backup archive path.")
+    verify_control_plane_backup_cmd.add_argument("--expected-sha256", default="", help="Optional SHA256 to verify against.")
+    restore_control_plane_backup_cmd = subparsers.add_parser(
+        "restore-control-plane-backup",
+        help="Run a control-plane backup restore drill into a target directory.",
+    )
+    restore_control_plane_backup_cmd.add_argument("backup_path", help="Backup archive path.")
+    restore_control_plane_backup_cmd.add_argument("--output-dir", default="", help="Optional restore drill output directory.")
+    restore_control_plane_backup_cmd.add_argument("--label", default="", help="Optional label for the restore drill directory.")
 
     list_skills = subparsers.add_parser("list-skills", help="Show skill manifests and optional matches.")
     list_skills.add_argument("--goal", default="", help="Optional goal to test skill matching.")
@@ -607,6 +622,28 @@ def cmd_backup_control_plane_storage(output: str, label: str) -> int:
     settings = load_settings()
     create_local_control_plane_repositories(settings)
     print(json.dumps(backup_control_plane_storage(settings, output=output, label=label), indent=2))
+    return 0
+
+
+def cmd_verify_control_plane_backup(backup_path: str, expected_sha256: str) -> int:
+    print(json.dumps(verify_control_plane_backup(backup_path, expected_sha256=expected_sha256), indent=2))
+    return 0
+
+
+def cmd_restore_control_plane_backup(backup_path: str, output_dir: str, label: str) -> int:
+    settings = load_settings()
+    create_local_control_plane_repositories(settings)
+    print(
+        json.dumps(
+            restore_control_plane_backup(
+                settings,
+                backup_path=backup_path,
+                output_dir=output_dir,
+                label=label,
+            ),
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1621,6 +1658,10 @@ def main() -> int:
         return cmd_control_plane_storage_status()
     if args.command == "backup-control-plane-storage":
         return cmd_backup_control_plane_storage(args.output, args.label)
+    if args.command == "verify-control-plane-backup":
+        return cmd_verify_control_plane_backup(args.backup_path, args.expected_sha256)
+    if args.command == "restore-control-plane-backup":
+        return cmd_restore_control_plane_backup(args.backup_path, args.output_dir, args.label)
     if args.command == "list-skills":
         return cmd_list_skills(args.goal)
     if args.command == "explain-patterns":

@@ -139,6 +139,10 @@ def load_settings() -> Settings:
                         "release-manager",
                         "ops-oncall",
                     ],
+                    "restore_storage": [
+                        "control-plane-admin",
+                        "ops-oncall",
+                    ],
                     "retry_job": [
                         "control-plane-admin",
                         "release-manager",
