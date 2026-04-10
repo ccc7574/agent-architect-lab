@@ -42,6 +42,11 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli check-gates /tmp/agent-archite
 PYTHONPATH=src python3 -m agent_architect_lab.cli evaluate-promotion /tmp/agent-architect-lab/.../reports/baseline.json /tmp/agent-architect-lab/.../reports/candidate.json --suite-aware-defaults
 PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-review /tmp/agent-architect-lab/.../reports/baseline.json /tmp/agent-architect-lab/.../reports/candidate.json --suite-aware-defaults --output-backfill ./candidate-backfill.jsonl
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-shadow /tmp/agent-architect-lab/.../reports/baseline.json --suite retrieval --report-name retrieval-shadow.json --suite-aware-defaults --output-backfill ./retrieval-shadow-backfill.jsonl
+PYTHONPATH=src python3 -m agent_architect_lab.cli open-incident --severity critical --summary "unsafe output reached production" --owner incident-commander --environment production --release-name 2026-04-10-main
+PYTHONPATH=src python3 -m agent_architect_lab.cli incident-review-board
+PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident incident-202604... --status contained --by incident-commander --note "rollback complete" --followup-eval-path ./incident-backfill.jsonl
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-incidents --status open
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-202604... --title "Incident Rollback Report"
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval approval_simulation --report-prefix release-candidate --suite-aware-defaults --output-backfill-dir ./release-backfills
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --baseline-manifest ./baseline-manifest.json --report-prefix release-candidate --suite-aware-defaults
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --report-prefix release-candidate --suite-aware-defaults --release-name 2026-04-10-main
@@ -133,6 +138,8 @@ More detail:
 - [docs/REPORT_REGISTRY.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/REPORT_REGISTRY.md)
 - [docs/RELEASE_LEDGER.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RELEASE_LEDGER.md)
 - [docs/RELEASE_LEDGER_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RELEASE_LEDGER_ZH.md)
+- [docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md)
+- [docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md)
 
 ## Artifact Strategy
 
@@ -151,6 +158,7 @@ Recorded releases are stored separately under `artifacts/releases`:
 - mutable operator state in `release-ledger.json`
 
 That split makes it possible to audit what was reviewed versus what was later approved or promoted.
+Operator incidents are stored under `artifacts/incidents/incident-ledger.json` so triage, containment, follow-up evals, and closure remain auditable across shifts.
 
 Production deploy readiness also respects `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES`, which defaults to `30`.
 Required production sign-off roles come from `AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES`, which defaults to `qa-owner,release-manager`.
@@ -166,9 +174,11 @@ Use `release-readiness-digest <release_name>` as the operator-facing summary vie
 Use `release-risk-board` to rank multiple recorded releases by operator risk so oncall can decide what to inspect first.
 Use `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to escalate long-idle releases into the risk board and handoff summary.
 Use `approval-review-board` plus `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to surface stale approval queues and releases still missing required approver roles.
+Use `open-incident`, `transition-incident`, `list-incidents`, and `incident-review-board` to run a basic incident command workflow with ownership, status, and follow-up eval linkage.
+Use `export-incident-report` to render one incident into a readable Markdown artifact for postmortems or stakeholder updates.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
-Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, override remediation, active overrides, and a summary line for the next operator.
+Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.
 Use `record-operator-handoff` to persist that handoff snapshot under `artifacts/handoffs` for shift-history and audit trails.
 Use `list-operator-handoffs` and `show-operator-handoff --latest` to review prior shift snapshots without manually opening artifact files.
 Use `export-operator-handoff-report --latest` to render the saved handoff into a Markdown report suitable for shift transfer, incident review, or status sharing.

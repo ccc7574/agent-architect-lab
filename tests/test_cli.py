@@ -14,11 +14,16 @@ from agent_architect_lab.cli import (
     cmd_deploy_release,
     cmd_environment_status,
     cmd_explain_patterns,
+    cmd_incident_review_board,
+    cmd_incident_status,
+    cmd_export_incident_report,
     cmd_grant_release_override,
+    cmd_list_incidents,
     cmd_list_active_overrides,
     cmd_list_operator_handoffs,
     cmd_list_skills,
     cmd_list_releases,
+    cmd_open_incident,
     cmd_operator_handoff,
     cmd_override_review_board,
     cmd_promote_release,
@@ -34,6 +39,7 @@ from agent_architect_lab.cli import (
     cmd_run_evals,
     cmd_run_release_shadow,
     cmd_show_operator_handoff,
+    cmd_transition_incident,
 )
 
 
@@ -105,6 +111,94 @@ def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Pa
     assert exit_code == 0
     assert payload["report_kind"] == "baseline"
     assert payload["label"] == "manual-approved"
+
+
+def test_cmd_incident_workflow_and_review_board(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES", "0")
+
+    open_buffer = io.StringIO()
+    with redirect_stdout(open_buffer):
+        open_exit = cmd_open_incident(
+            "critical",
+            "production rollout is returning unsafe answers",
+            "ic-owner",
+            "production",
+            "release-unsafe",
+            "/tmp/report.json",
+            "customer escalation",
+        )
+    open_payload = json.loads(open_buffer.getvalue())
+
+    list_buffer = io.StringIO()
+    with redirect_stdout(list_buffer):
+        list_exit = cmd_list_incidents("", "", 10)
+    list_payload = json.loads(list_buffer.getvalue())
+
+    board_buffer = io.StringIO()
+    with redirect_stdout(board_buffer):
+        board_exit = cmd_incident_review_board("", 10)
+    board_payload = json.loads(board_buffer.getvalue())
+
+    transition_buffer = io.StringIO()
+    with redirect_stdout(transition_buffer):
+        transition_exit = cmd_transition_incident(
+            open_payload["incident_id"],
+            "contained",
+            "incident-commander",
+            "rollback complete",
+            "ops-owner",
+            "/tmp/followup.jsonl",
+        )
+    transition_payload = json.loads(transition_buffer.getvalue())
+
+    status_buffer = io.StringIO()
+    with redirect_stdout(status_buffer):
+        status_exit = cmd_incident_status(open_payload["incident_id"])
+    status_payload = json.loads(status_buffer.getvalue())
+
+    assert open_exit == 0
+    assert open_payload["status"] == "open"
+    assert list_exit == 0
+    assert list_payload[0]["incident_id"] == open_payload["incident_id"]
+    assert board_exit == 0
+    assert board_payload["rows"][0]["incident_id"] == open_payload["incident_id"]
+    assert board_payload["rows"][0]["recommended_action"] == "escalate_incident_owner"
+    assert transition_exit == 0
+    assert transition_payload["status"] == "contained"
+    assert transition_payload["owner"] == "ops-owner"
+    assert transition_payload["followup_eval_path"] == "/tmp/followup.jsonl"
+    assert status_exit == 0
+    assert status_payload["events"][-1]["to_status"] == "contained"
+
+
+def test_cmd_export_incident_report_writes_markdown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    open_buffer = io.StringIO()
+    with redirect_stdout(open_buffer):
+        open_exit = cmd_open_incident(
+            "high",
+            "staging rollback triggered",
+            "incident-commander",
+            "staging",
+            "release-a",
+            "/tmp/report.json",
+            "triage started",
+        )
+    open_payload = json.loads(open_buffer.getvalue())
+
+    export_buffer = io.StringIO()
+    with redirect_stdout(export_buffer):
+        export_exit = cmd_export_incident_report(open_payload["incident_id"], "", "Incident Rollback Report")
+    export_payload = json.loads(export_buffer.getvalue())
+    markdown = Path(export_payload["saved_to"]).read_text(encoding="utf-8")
+
+    assert open_exit == 0
+    assert export_exit == 0
+    assert "# Incident Rollback Report" in markdown
+    assert "## Timeline" in markdown
+    assert "staging rollback triggered" in markdown
 
 
 def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, tmp_path: Path) -> None:
@@ -686,6 +780,8 @@ def test_cmd_operator_handoff_reports_combined_shift_payload(monkeypatch, tmp_pa
     assert payload["release_risk_board"]["rows"][0]["release_name"] == "release-high"
     assert payload["approval_review_board"]["rows"][0]["release_name"] == "release-high"
     assert payload["override_review_board"]["rows"][0]["status"] == "expiring_soon"
+    assert payload["incident_review_board"]["rows"] == []
+    assert payload["active_incidents"] == []
     assert len(payload["active_overrides"]) == 1
     assert "High-risk releases: release-high." in payload["summary"]
 
@@ -817,6 +913,33 @@ def test_cmd_export_operator_handoff_report_writes_markdown(monkeypatch, tmp_pat
     assert markdown_path.exists()
     assert markdown_path.suffix == ".md"
     assert "# Night Shift Release Report" in markdown
+    assert "## Incident Review Board" in markdown
     assert "## Approval Review Board" in markdown
     assert "## Override Review Board" in markdown
     assert "release-high" in markdown
+
+
+def test_cmd_operator_handoff_includes_active_incidents(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES", "0")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_open_incident(
+            "high",
+            "staging rollback in progress",
+            "incident-commander",
+            "staging",
+            "release-a",
+            "",
+            "triage started",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_operator_handoff([], 10, 10)
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["incident_review_board"]["rows"][0]["release_name"] == "release-a"
+    assert payload["active_incidents"][0]["status"] == "open"
+    assert "Active incidents:" in payload["summary"]

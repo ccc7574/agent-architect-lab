@@ -16,9 +16,11 @@ class Settings:
     reports_dir: Path
     checkpoints_dir: Path
     handoffs_dir: Path
+    incidents_dir: Path
     releases_dir: Path
     release_manifests_dir: Path
     release_ledger_path: Path
+    incident_ledger_path: Path
     notes_dir: Path
     skills_dir: Path
     datasets_dir: Path
@@ -36,6 +38,7 @@ class Settings:
     override_expiring_soon_minutes: int
     release_stale_minutes: int
     approval_stale_minutes: int
+    incident_stale_minutes: int
 
 
 def _default_artifacts_dir(project_root: Path) -> Path:
@@ -54,9 +57,11 @@ def load_settings() -> Settings:
     reports_dir = artifacts_dir / "reports"
     checkpoints_dir = artifacts_dir / "checkpoints"
     handoffs_dir = artifacts_dir / "handoffs"
+    incidents_dir = artifacts_dir / "incidents"
     releases_dir = artifacts_dir / "releases"
     release_manifests_dir = releases_dir / "manifests"
     release_ledger_path = releases_dir / "release-ledger.json"
+    incident_ledger_path = incidents_dir / "incident-ledger.json"
     notes_dir = project_root / "data" / "notes"
     skills_dir = project_root / "data" / "skills"
     datasets_dir = project_root / "src" / "agent_architect_lab" / "evals" / "datasets"
@@ -123,6 +128,9 @@ def load_settings() -> Settings:
     approval_stale_minutes = int(
         os.environ.get("AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES", "120")
     )
+    incident_stale_minutes = int(
+        os.environ.get("AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES", "60")
+    )
     configured_environment_names = os.environ.get("AGENT_ARCHITECT_LAB_ENVIRONMENTS")
     if configured_environment_names is not None:
         environment_names = [
@@ -142,6 +150,7 @@ def load_settings() -> Settings:
         reports_dir,
         checkpoints_dir,
         handoffs_dir,
+        incidents_dir,
         releases_dir,
         release_manifests_dir,
         notes_dir,
@@ -157,9 +166,11 @@ def load_settings() -> Settings:
         reports_dir=reports_dir,
         checkpoints_dir=checkpoints_dir,
         handoffs_dir=handoffs_dir,
+        incidents_dir=incidents_dir,
         releases_dir=releases_dir,
         release_manifests_dir=release_manifests_dir,
         release_ledger_path=release_ledger_path,
+        incident_ledger_path=incident_ledger_path,
         notes_dir=notes_dir,
         skills_dir=skills_dir,
         datasets_dir=datasets_dir,
@@ -177,4 +188,5 @@ def load_settings() -> Settings:
         override_expiring_soon_minutes=override_expiring_soon_minutes,
         release_stale_minutes=release_stale_minutes,
         approval_stale_minutes=approval_stale_minutes,
+        incident_stale_minutes=incident_stale_minutes,
     )

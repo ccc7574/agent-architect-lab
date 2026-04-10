@@ -117,6 +117,40 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
 ```
 
+登记一个与 release 或环境关联的 incident：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli open-incident \
+  --severity critical \
+  --summary "unsafe output reached production" \
+  --owner incident-commander \
+  --environment production \
+  --release-name 2026-04-10-main
+```
+
+查看 incident 优先级看板：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli incident-review-board
+```
+
+推进 incident 状态并补充 follow-up eval：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident \
+  incident-20260410-example \
+  --status contained \
+  --by incident-commander \
+  --note "rollback complete" \
+  --followup-eval-path ./incident-backfill.jsonl
+```
+
+把 incident 导出为 Markdown 报告：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-20260410-example --title "Incident Rollback Report"
+```
+
 查看 override 整改优先级看板：
 
 ```bash
@@ -382,6 +416,30 @@ override 只用于紧急场景，不应该替代正常流程。
 - `add_override_expiry`
 - `observe_override`
 
+## incident review board
+
+`incident-review-board` 是面向值班和事故指挥的 incident 优先级看板。
+
+它会综合：
+
+- `severity`
+- 当前 `status`
+- 是否已经 stale
+- 是否已经补上 `followup_eval_path`
+
+典型动作包括：
+
+- `acknowledge_incident`
+- `contain_incident`
+- `add_followup_eval`
+- `resolve_incident`
+- `close_incident`
+- `escalate_incident_owner`
+
+可以通过 `AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES` 控制 incident 多久未更新后升级。
+
+`export-incident-report` 会把 incident 当前状态和完整时间线渲染为 Markdown 报告，方便复盘和对外同步。
+
 ## revoke override
 
 `revoke-release-override` 用于撤销已有 override，但不会物理删除记录。
@@ -400,7 +458,9 @@ override 只用于紧急场景，不应该替代正常流程。
 
 - `release-risk-board`
 - `approval-review-board`
+- `incident-review-board`
 - `override-review-board`
+- 当前未关闭的 `active_incidents`
 - 当前生效的 `active_overrides`
 - 一条面向下一位值班人员的 summary
 

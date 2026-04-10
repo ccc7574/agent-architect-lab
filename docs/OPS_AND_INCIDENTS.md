@@ -8,6 +8,7 @@ An AI architect should be able to explain how the platform behaves when it is wr
 - traces and checkpoints are enough to reconstruct a bad run
 - release manifests preserve what was reviewed before approval
 - a release ledger records who approved or promoted a candidate
+- an incident ledger records owner, severity, status transitions, and linked releases
 - risky changes can be rolled back quickly
 - incident review produces concrete eval or policy updates
 
@@ -24,10 +25,12 @@ An AI architect should be able to explain how the platform behaves when it is wr
 3. Contain
 - roll back or block the unsafe path
 - preserve artifacts for review
+- update the incident record with containment status and owner changes
 
 4. Learn
 - add a new eval or tighten a gate
 - update routing or policy logic
+- attach the follow-up eval artifact to the incident before closure
 
 ## Why This Matters
 

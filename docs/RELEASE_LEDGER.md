@@ -162,6 +162,40 @@ Inspect approval backlog and stale approval queues:
 PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
 ```
 
+Open an incident linked to a release or environment:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli open-incident \
+  --severity critical \
+  --summary "unsafe output reached production" \
+  --owner incident-commander \
+  --environment production \
+  --release-name 2026-04-10-main
+```
+
+Review unresolved incidents:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli incident-review-board
+```
+
+Advance an incident after containment or follow-up work:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident \
+  incident-20260410-example \
+  --status contained \
+  --by incident-commander \
+  --note "rollback complete" \
+  --followup-eval-path ./incident-backfill.jsonl
+```
+
+Render an incident as a Markdown report:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-20260410-example --title "Incident Rollback Report"
+```
+
 Inspect override cleanup priority across releases:
 
 ```bash
@@ -240,6 +274,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli approval-review-board
+PYTHONPATH=src python3 -m agent_architect_lab.cli incident-review-board
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-incidents --status open
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override 2026-04-10-main --environment production --blocker environment_frozen --by release-manager
@@ -263,9 +299,12 @@ Overrides are scoped to one release, one environment, and one exact blocker stri
 Set `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to control when a long-idle release is escalated into the risk board and handoff summary.
 `approval-review-board` tracks releases still waiting on first approval or missing required approver roles for the evaluated environments.
 Set `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to escalate long-idle approval queues.
+`open-incident`, `transition-incident`, `list-incidents`, and `incident-status` turn incident handling into an auditable state machine rather than ad hoc notes.
+`incident-review-board` ranks unresolved incidents by severity, stale age, and workflow status. Set `AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES` to escalate long-idle incidents.
+`export-incident-report` renders the incident state and timeline into Markdown so incident artifacts can be shared outside raw JSON or CLI output.
 `override-review-board` ranks individual overrides into `expired`, `expiring_soon`, `active_no_expiry`, and `active`, with a remediation action for each row.
 `revoke-release-override` marks the latest matching override as revoked. Revoked overrides stop affecting readiness checks and stop appearing in active override views, but remain in `release-status` for audit history.
-`operator-handoff` packages the risk board, approval review board, override review board, and active override list into a single shift handoff payload with a generated summary.
+`operator-handoff` packages the risk board, approval review board, incident review board, override review board, active incidents, and active override list into a single shift handoff payload with a generated summary.
 `record-operator-handoff` writes that payload to `artifacts/handoffs` so handoff state can be preserved between shifts.
 `list-operator-handoffs` provides a compact shift-history index, and `show-operator-handoff --latest` reloads the latest saved handoff without requiring operators to inspect the artifact directory manually.
 `export-operator-handoff-report` renders a saved handoff snapshot into Markdown so the same operator state can be shared as a readable shift-transfer or incident-review document.

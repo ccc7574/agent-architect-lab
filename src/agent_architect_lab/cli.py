@@ -12,7 +12,15 @@ from agent_architect_lab.config import load_settings
 from agent_architect_lab.evals.tasks import list_available_suites, load_default_suite, load_suite
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
-from agent_architect_lab.harness.incidents import save_incident_suggestions, suggest_incident_evals
+from agent_architect_lab.harness.incidents import (
+    get_incident_record,
+    get_incident_review_board,
+    list_incidents,
+    open_incident,
+    save_incident_suggestions,
+    suggest_incident_evals,
+    transition_incident,
+)
 from agent_architect_lab.harness.ledger import (
     get_approval_review_board,
     check_deploy_readiness,
@@ -85,6 +93,40 @@ def build_parser() -> argparse.ArgumentParser:
     incidents = subparsers.add_parser("suggest-incident-evals", help="Generate candidate eval tasks from failed report results.")
     incidents.add_argument("report", help="Report path to inspect.")
     incidents.add_argument("--output", default="", help="Optional JSONL output path for suggested tasks.")
+
+    open_incident_cmd = subparsers.add_parser("open-incident", help="Record a production incident linked to a release, environment, or report.")
+    open_incident_cmd.add_argument("--severity", required=True, choices=["critical", "high", "medium", "low"], help="Incident severity.")
+    open_incident_cmd.add_argument("--summary", required=True, help="Short operator-facing incident summary.")
+    open_incident_cmd.add_argument("--owner", required=True, help="Current incident owner.")
+    open_incident_cmd.add_argument("--environment", default="", help="Optional affected environment.")
+    open_incident_cmd.add_argument("--release-name", default="", help="Optional linked release.")
+    open_incident_cmd.add_argument("--source-report", default="", help="Optional linked harness report path.")
+    open_incident_cmd.add_argument("--note", default="", help="Optional opening note.")
+
+    transition_incident_cmd = subparsers.add_parser("transition-incident", help="Advance an incident through acknowledgement, containment, resolution, or closure.")
+    transition_incident_cmd.add_argument("incident_id", help="Incident identifier.")
+    transition_incident_cmd.add_argument("--status", required=True, choices=["acknowledged", "contained", "resolved", "closed"], help="Target incident status.")
+    transition_incident_cmd.add_argument("--by", required=True, help="Operator identity.")
+    transition_incident_cmd.add_argument("--note", default="", help="Optional transition note.")
+    transition_incident_cmd.add_argument("--owner", default="", help="Optional owner reassignment.")
+    transition_incident_cmd.add_argument("--followup-eval-path", default="", help="Optional linked follow-up eval artifact path.")
+
+    list_incidents_cmd = subparsers.add_parser("list-incidents", help="List recorded incidents with optional status or severity filtering.")
+    list_incidents_cmd.add_argument("--status", default="", choices=["", "open", "acknowledged", "contained", "resolved", "closed"], help="Optional status filter.")
+    list_incidents_cmd.add_argument("--severity", default="", choices=["", "critical", "high", "medium", "low"], help="Optional severity filter.")
+    list_incidents_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of incidents to return.")
+
+    incident_status_cmd = subparsers.add_parser("incident-status", help="Show the full state and history for one incident.")
+    incident_status_cmd.add_argument("incident_id", help="Incident identifier.")
+
+    export_incident_report_cmd = subparsers.add_parser("export-incident-report", help="Render a recorded incident as a Markdown report.")
+    export_incident_report_cmd.add_argument("incident_id", help="Incident identifier.")
+    export_incident_report_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/incidents/<incident_id>.md.")
+    export_incident_report_cmd.add_argument("--title", default="", help="Optional report title override.")
+
+    incident_review_board_cmd = subparsers.add_parser("incident-review-board", help="Show unresolved incident priority and stale incident queues.")
+    incident_review_board_cmd.add_argument("--status", default="", choices=["", "open", "acknowledged", "contained", "resolved", "closed"], help="Optional status filter.")
+    incident_review_board_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of incidents to return.")
 
     promote = subparsers.add_parser("evaluate-promotion", help="Evaluate whether a candidate report is promotable against a baseline.")
     promote.add_argument("baseline", help="Baseline report path.")
@@ -270,6 +312,136 @@ def cmd_run_evals(report_name: str, suite_name: str, report_kind: str, report_la
         print(f"planner_provider={runtime.planner_provider_name}")
     finally:
         runtime.close()
+    return 0
+
+
+def cmd_open_incident(
+    severity: str,
+    summary: str,
+    owner: str,
+    environment: str,
+    release_name: str,
+    source_report: str,
+    note: str,
+) -> int:
+    settings = load_settings()
+    record = open_incident(
+        severity=severity,
+        summary=summary,
+        owner=owner,
+        environment=environment or None,
+        release_name=release_name or None,
+        source_report_path=source_report or None,
+        note=note,
+        ledger_path=settings.incident_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
+def cmd_transition_incident(
+    incident_id: str,
+    status: str,
+    actor: str,
+    note: str,
+    owner: str,
+    followup_eval_path: str,
+) -> int:
+    settings = load_settings()
+    record = transition_incident(
+        incident_id,
+        status=status,
+        actor=actor,
+        note=note,
+        owner=owner or None,
+        followup_eval_path=followup_eval_path or None,
+        ledger_path=settings.incident_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
+def cmd_list_incidents(status: str, severity: str, limit: int) -> int:
+    settings = load_settings()
+    rows = list_incidents(
+        ledger_path=settings.incident_ledger_path,
+        status=status or None,
+        severity=severity or None,
+        limit=limit,
+    )
+    print(json.dumps([row.to_dict() for row in rows], indent=2))
+    return 0
+
+
+def cmd_incident_status(incident_id: str) -> int:
+    settings = load_settings()
+    record = get_incident_record(incident_id, ledger_path=settings.incident_ledger_path)
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
+def _render_incident_markdown(record: dict, *, title: str) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        f"- Incident ID: {_markdown_cell(record.get('incident_id'))}",
+        f"- Severity: {_markdown_cell(record.get('severity'))}",
+        f"- Status: {_markdown_cell(record.get('status'))}",
+        f"- Owner: {_markdown_cell(record.get('owner'))}",
+        f"- Environment: {_markdown_cell(record.get('environment'))}",
+        f"- Release: {_markdown_cell(record.get('release_name'))}",
+        f"- Source Report: {_markdown_cell(record.get('source_report_path'))}",
+        f"- Follow-up Eval: {_markdown_cell(record.get('followup_eval_path'))}",
+        f"- Created At: {_markdown_cell(record.get('created_at'))}",
+        f"- Last Updated At: {_markdown_cell(record.get('last_updated_at'))}",
+        "",
+        "## Summary",
+        "",
+        record.get("summary", ""),
+        "",
+        "## Timeline",
+        "",
+    ]
+    lines.extend(
+        _render_markdown_table(
+            ["Timestamp", "Action", "Actor", "From", "To", "Note"],
+            [
+                [
+                    event.get("timestamp"),
+                    event.get("action"),
+                    event.get("actor"),
+                    event.get("from_status"),
+                    event.get("to_status"),
+                    event.get("note"),
+                ]
+                for event in record.get("events", [])
+            ],
+        )
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def cmd_export_incident_report(incident_id: str, output: str, title: str) -> int:
+    settings = load_settings()
+    record = get_incident_record(incident_id, ledger_path=settings.incident_ledger_path).to_dict()
+    output_path = Path(output) if output else settings.incidents_dir / f"{incident_id}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report_title = title.strip() or f"Incident Report: {incident_id}"
+    output_path.write_text(_render_incident_markdown(record, title=report_title), encoding="utf-8")
+    print(json.dumps({"saved_to": str(output_path), "incident_id": incident_id, "title": report_title}, indent=2))
+    return 0
+
+
+def cmd_incident_review_board(status: str, limit: int) -> int:
+    settings = load_settings()
+    board = get_incident_review_board(
+        ledger_path=settings.incident_ledger_path,
+        stale_minutes=settings.incident_stale_minutes,
+        status=status or None,
+        limit=limit,
+    )
+    print(json.dumps(board.to_dict(), indent=2))
     return 0
 
 
@@ -679,7 +851,12 @@ def cmd_override_review_board(release_name: str, environment: str, limit: int) -
     return 0
 
 
-def cmd_operator_handoff(environments: list[str], release_limit: int, override_limit: int) -> int:
+def _build_operator_handoff_payload(
+    *,
+    environments: list[str],
+    release_limit: int,
+    override_limit: int,
+) -> dict:
     settings = load_settings()
     handoff = get_operator_handoff(
         environments=environments or settings.environment_names,
@@ -694,7 +871,39 @@ def cmd_operator_handoff(environments: list[str], release_limit: int, override_l
         release_limit=release_limit,
         override_limit=override_limit,
     )
-    print(json.dumps(handoff.to_dict(), indent=2))
+    incident_review_board = get_incident_review_board(
+        ledger_path=settings.incident_ledger_path,
+        stale_minutes=settings.incident_stale_minutes,
+        status=None,
+        limit=override_limit,
+    )
+    active_incidents = [
+        row.to_dict()
+        for row in list_incidents(
+            ledger_path=settings.incident_ledger_path,
+            status=None,
+            severity=None,
+            limit=override_limit,
+        )
+        if row.status not in {"resolved", "closed"}
+    ]
+    payload = handoff.to_dict()
+    payload["incident_review_board"] = incident_review_board.to_dict()
+    payload["active_incidents"] = active_incidents
+    if incident_review_board.rows:
+        active_names = [row.incident_id for row in incident_review_board.rows if row.status not in {"resolved", "closed"}]
+        if active_names:
+            payload["summary"] += " Active incidents: " + ", ".join(active_names[:5]) + "."
+    return payload
+
+
+def cmd_operator_handoff(environments: list[str], release_limit: int, override_limit: int) -> int:
+    payload = _build_operator_handoff_payload(
+        environments=environments,
+        release_limit=release_limit,
+        override_limit=override_limit,
+    )
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -705,26 +914,19 @@ def cmd_record_operator_handoff(
     label: str,
 ) -> int:
     settings = load_settings()
-    handoff = get_operator_handoff(
-        environments=environments or settings.environment_names,
-        ledger_path=settings.release_ledger_path,
-        production_soak_minutes=settings.production_soak_minutes,
-        required_approver_roles=settings.production_required_approver_roles,
-        environment_policies=settings.environment_policies,
-        environment_freeze_windows=settings.environment_freeze_windows,
-        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
-        release_stale_minutes=settings.release_stale_minutes,
-        approval_stale_minutes=settings.approval_stale_minutes,
+    payload = _build_operator_handoff_payload(
+        environments=environments,
         release_limit=release_limit,
         override_limit=override_limit,
     )
     safe_label = sub(r"[^a-zA-Z0-9._-]+", "-", label.strip()).strip("-")
-    file_name = f"operator-handoff-{handoff.generated_at.replace(':', '').replace('+', '_')}"
+    generated_at = str(payload.get("generated_at", "unknown"))
+    file_name = f"operator-handoff-{generated_at.replace(':', '').replace('+', '_')}"
     if safe_label:
         file_name += f"-{safe_label}"
     output_path = settings.handoffs_dir / f"{file_name}.json"
-    output_path.write_text(json.dumps(handoff.to_dict(), indent=2), encoding="utf-8")
-    print(json.dumps({"saved_to": str(output_path), "handoff": handoff.to_dict()}, indent=2))
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(json.dumps({"saved_to": str(output_path), "handoff": payload}, indent=2))
     return 0
 
 
@@ -753,6 +955,8 @@ def _build_operator_handoff_history_row(path: Path, payload: dict) -> dict:
         "high_risk_releases": high_risk_releases,
         "approval_review_count": len(payload.get("approval_review_board", {}).get("rows", [])),
         "override_review_count": len(payload.get("override_review_board", {}).get("rows", [])),
+        "incident_review_count": len(payload.get("incident_review_board", {}).get("rows", [])),
+        "active_incident_count": len(payload.get("active_incidents", [])),
         "active_override_count": len(payload.get("active_overrides", [])),
         "summary": payload.get("summary", ""),
     }
@@ -839,6 +1043,8 @@ def _render_operator_handoff_markdown(payload: dict, *, title: str) -> str:
     approval_rows = payload.get("approval_review_board", {}).get("rows", [])
     override_rows = payload.get("override_review_board", {}).get("rows", [])
     active_overrides = payload.get("active_overrides", [])
+    incident_rows = payload.get("incident_review_board", {}).get("rows", [])
+    active_incidents = payload.get("active_incidents", [])
     lines = [
         f"# {title}",
         "",
@@ -865,6 +1071,52 @@ def _render_operator_handoff_markdown(payload: dict, *, title: str) -> str:
                     row.get("next_action"),
                 ]
                 for row in release_rows
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Incident Review Board",
+            "",
+        ]
+    )
+    lines.extend(
+        _render_markdown_table(
+            ["Incident", "Severity", "Status", "Owner", "Release", "Recommended Action"],
+            [
+                [
+                    row.get("incident_id"),
+                    row.get("severity"),
+                    row.get("status"),
+                    row.get("owner"),
+                    row.get("release_name"),
+                    row.get("recommended_action"),
+                ]
+                for row in incident_rows
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Active Incidents",
+            "",
+        ]
+    )
+    lines.extend(
+        _render_markdown_table(
+            ["Incident", "Severity", "Status", "Owner", "Environment", "Release"],
+            [
+                [
+                    row.get("incident_id"),
+                    row.get("severity"),
+                    row.get("status"),
+                    row.get("owner"),
+                    row.get("environment"),
+                    row.get("release_name"),
+                ]
+                for row in active_incidents
             ],
         )
     )
@@ -1038,6 +1290,18 @@ def main() -> int:
         )
     if args.command == "suggest-incident-evals":
         return cmd_suggest_incident_evals(args.report, args.output)
+    if args.command == "open-incident":
+        return cmd_open_incident(args.severity, args.summary, args.owner, args.environment, args.release_name, args.source_report, args.note)
+    if args.command == "transition-incident":
+        return cmd_transition_incident(args.incident_id, args.status, args.by, args.note, args.owner, args.followup_eval_path)
+    if args.command == "list-incidents":
+        return cmd_list_incidents(args.status, args.severity, args.limit)
+    if args.command == "incident-status":
+        return cmd_incident_status(args.incident_id)
+    if args.command == "export-incident-report":
+        return cmd_export_incident_report(args.incident_id, args.output, args.title)
+    if args.command == "incident-review-board":
+        return cmd_incident_review_board(args.status, args.limit)
     if args.command == "evaluate-promotion":
         return cmd_evaluate_promotion(
             args.baseline,

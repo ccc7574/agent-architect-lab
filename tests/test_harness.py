@@ -6,6 +6,14 @@ from pathlib import Path
 
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
+from agent_architect_lab.harness.incidents import (
+    default_incident_ledger_path,
+    get_incident_record,
+    get_incident_review_board,
+    list_incidents,
+    open_incident,
+    transition_incident,
+)
 from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
     get_approval_review_board,
@@ -1489,3 +1497,47 @@ def test_operator_handoff_combines_release_and_override_views(tmp_path: Path) ->
     assert handoff.override_review_board.rows[0].status == "expiring_soon"
     assert len(handoff.active_overrides) == 1
     assert "High-risk releases: release-high." in handoff.summary
+
+
+def test_incident_ledger_tracks_open_transition_and_review_priority(tmp_path: Path) -> None:
+    incidents_dir = tmp_path / "incidents"
+    ledger_path = default_incident_ledger_path(incidents_dir)
+
+    opened = open_incident(
+        severity="critical",
+        summary="unsafe output reached production",
+        owner="incident-commander",
+        environment="production",
+        release_name="release-a",
+        source_report_path="/tmp/report.json",
+        note="customer escalation",
+        ledger_path=ledger_path,
+    )
+
+    transitioned = transition_incident(
+        opened.incident_id,
+        status="contained",
+        actor="incident-commander",
+        note="rollback complete",
+        owner="ops-owner",
+        followup_eval_path="/tmp/followup.jsonl",
+        ledger_path=ledger_path,
+    )
+
+    board = get_incident_review_board(
+        ledger_path=ledger_path,
+        stale_minutes=0,
+        status=None,
+        limit=10,
+    )
+    listed = list_incidents(ledger_path=ledger_path, limit=10)
+    fetched = get_incident_record(opened.incident_id, ledger_path=ledger_path)
+
+    assert transitioned.status == "contained"
+    assert transitioned.owner == "ops-owner"
+    assert transitioned.followup_eval_path == "/tmp/followup.jsonl"
+    assert listed[0].incident_id == opened.incident_id
+    assert fetched.events[-1].to_status == "contained"
+    assert board.rows[0].incident_id == opened.incident_id
+    assert board.rows[0].risk_level == "high"
+    assert board.rows[0].recommended_action == "escalate_incident_owner"
