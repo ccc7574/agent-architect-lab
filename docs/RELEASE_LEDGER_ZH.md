@@ -117,6 +117,17 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 ```
 
+撤销 override 但保留审计历史：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override \
+  2026-04-10-main \
+  --environment production \
+  --blocker environment_frozen \
+  --by release-manager \
+  --note "incident closed"
+```
+
 查看当前环境策略：
 
 ```bash
@@ -313,6 +324,16 @@ override 只用于紧急场景，不应该替代正常流程。
 - `review_override_expiry`
 - `add_override_expiry`
 - `observe_override`
+
+## revoke override
+
+`revoke-release-override` 用于撤销已有 override，但不会物理删除记录。
+
+撤销后会发生三件事：
+
+- override 不再影响 readiness 计算
+- 它不会再出现在 `list-active-overrides`
+- 它仍然保留在 `release-status` 中，供审计追踪
 
 ## 推荐运维流程
 

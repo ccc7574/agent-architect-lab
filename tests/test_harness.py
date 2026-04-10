@@ -23,6 +23,7 @@ from agent_architect_lab.harness.ledger import (
     list_active_overrides,
     list_releases,
     record_release_candidate,
+    revoke_release_override,
     rollback_release,
     transition_release,
 )
@@ -1123,6 +1124,60 @@ def test_release_override_rejects_non_overridable_blocker(tmp_path: Path) -> Non
         assert "cannot be overridden" in str(exc)
     else:
         raise AssertionError("Expected non-overridable blocker to raise ValueError.")
+
+
+def test_revoke_release_override_removes_active_override_effect(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-revoke", report_prefix="revoke", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-revoke", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    grant_release_override(
+        "release-revoke",
+        environment="staging",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="hotfix waiver",
+        ledger_path=ledger_path,
+    )
+
+    waived = check_deploy_readiness(
+        "release-revoke",
+        environment="staging",
+        ledger_path=ledger_path,
+        environment_freeze_windows={"staging": ["00:00-23:59"]},
+    )
+    assert waived.passed is True
+
+    record = revoke_release_override(
+        "release-revoke",
+        environment="staging",
+        blocker="environment_frozen",
+        actor="release-manager",
+        note="window closed",
+        ledger_path=ledger_path,
+    )
+    blocked = check_deploy_readiness(
+        "release-revoke",
+        environment="staging",
+        ledger_path=ledger_path,
+        environment_freeze_windows={"staging": ["00:00-23:59"]},
+    )
+
+    assert record.overrides[-1].revoked_by == "release-manager"
+    assert blocked.passed is False
+    assert blocked.blockers == ["environment_frozen"]
+    assert list_active_overrides(ledger_path=ledger_path) == []
 
 
 def test_list_active_overrides_filters_and_skips_expired_entries(tmp_path: Path) -> None:

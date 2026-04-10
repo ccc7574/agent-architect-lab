@@ -20,6 +20,7 @@ from agent_architect_lab.cli import (
     cmd_override_review_board,
     cmd_promote_release,
     cmd_register_report,
+    cmd_revoke_release_override,
     cmd_release_readiness_digest,
     cmd_release_risk_board,
     cmd_rollout_matrix,
@@ -406,6 +407,45 @@ def test_cmd_grant_release_override_unblocks_readiness(monkeypatch, tmp_path: Pa
     assert waived_exit == 0
     assert waived_payload["blockers"] == []
     assert "override_applied:environment_frozen:incident-commander" in waived_payload["evidence"]
+
+
+def test_cmd_revoke_release_override_restores_blocker(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENT_FREEZE_WINDOWS", '{"staging":["00:00-23:59"]}')
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-a",
+            "staging",
+            "environment_frozen",
+            "incident-commander",
+            "hotfix waiver",
+            "",
+        )
+
+    revoke_buffer = io.StringIO()
+    with redirect_stdout(revoke_buffer):
+        revoke_exit = cmd_revoke_release_override(
+            "release-a",
+            "staging",
+            "environment_frozen",
+            "release-manager",
+            "window closed",
+        )
+    revoke_payload = json.loads(revoke_buffer.getvalue())
+
+    blocked_buffer = io.StringIO()
+    with redirect_stdout(blocked_buffer):
+        blocked_exit = cmd_check_deploy_readiness("release-a", "staging")
+    blocked_payload = json.loads(blocked_buffer.getvalue())
+
+    assert revoke_exit == 0
+    assert revoke_payload["overrides"][0]["revoked_by"] == "release-manager"
+    assert blocked_exit == 1
+    assert blocked_payload["blockers"] == ["environment_frozen"]
 
 
 def test_cmd_list_active_overrides_reports_current_entries(monkeypatch, tmp_path: Path) -> None:

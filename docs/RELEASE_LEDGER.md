@@ -162,6 +162,17 @@ Inspect override cleanup priority across releases:
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 ```
 
+Revoke an override while preserving audit history:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override \
+  2026-04-10-main \
+  --environment production \
+  --blocker environment_frozen \
+  --by release-manager \
+  --note "incident closed"
+```
+
 Grant a temporary override for a specific blocker:
 
 ```bash
@@ -194,6 +205,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest 2026-
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
+PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override 2026-04-10-main --environment production --blocker environment_frozen --by release-manager
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
@@ -207,6 +219,7 @@ Overrides are scoped to one release, one environment, and one exact blocker stri
 `release-readiness-digest` uses `AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES` to decide which overrides should be flagged as expiring soon. The default threshold is `120` minutes.
 `release-risk-board` ranks releases by unresolved environment blockers, expiring overrides, and active override footprint so operators can focus on the riskiest release first.
 `override-review-board` ranks individual overrides into `expired`, `expiring_soon`, `active_no_expiry`, and `active`, with a remediation action for each row.
+`revoke-release-override` marks the latest matching override as revoked. Revoked overrides stop affecting readiness checks and stop appearing in active override views, but remain in `release-status` for audit history.
 
 ## Why This Matters
 

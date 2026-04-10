@@ -134,6 +134,9 @@ class ReleaseOverride:
     created_at: str
     note: str = ""
     expires_at: str | None = None
+    revoked_at: str | None = None
+    revoked_by: str | None = None
+    revoke_note: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -143,6 +146,9 @@ class ReleaseOverride:
             "created_at": self.created_at,
             "note": self.note,
             "expires_at": self.expires_at,
+            "revoked_at": self.revoked_at,
+            "revoked_by": self.revoked_by,
+            "revoke_note": self.revoke_note,
         }
 
     @classmethod
@@ -154,6 +160,9 @@ class ReleaseOverride:
             created_at=payload["created_at"],
             note=payload.get("note", ""),
             expires_at=payload.get("expires_at"),
+            revoked_at=payload.get("revoked_at"),
+            revoked_by=payload.get("revoked_by"),
+            revoke_note=payload.get("revoke_note", ""),
         )
 
 
@@ -1138,6 +1147,44 @@ class ReleaseLedger:
         )
         return record
 
+    def revoke_override(
+        self,
+        release_name: str,
+        environment: str,
+        blocker: str,
+        actor: str,
+        note: str = "",
+    ) -> ReleaseRecord:
+        record = self.get(release_name)
+        target: ReleaseOverride | None = None
+        for override in reversed(record.overrides):
+            if override.environment != environment or override.blocker != blocker:
+                continue
+            if override.revoked_at is not None:
+                continue
+            target = override
+            break
+        if target is None:
+            raise ValueError(
+                f"Release '{release_name}' has no active override for blocker '{blocker}' in environment '{environment}'."
+            )
+        timestamp = utc_now_iso()
+        target.revoked_at = timestamp
+        target.revoked_by = actor
+        target.revoke_note = note
+        record.last_updated_at = timestamp
+        record.events.append(
+            ReleaseEvent(
+                timestamp=timestamp,
+                action=f"revoke_override:{environment}",
+                actor=actor,
+                from_state=record.state,
+                to_state=record.state,
+                note=f"{blocker}{f' note:{note}' if note else ''}",
+            )
+        )
+        return record
+
     def deploy(
         self,
         release_name: str,
@@ -1417,6 +1464,8 @@ def _predecessor_soak_blocker(environment: str) -> str:
 
 
 def _override_is_active(override: ReleaseOverride, *, now: datetime | None = None) -> bool:
+    if override.revoked_at is not None:
+        return False
     if override.expires_at is None:
         return True
     current_time = now or datetime.now(UTC)
@@ -1685,6 +1734,27 @@ def grant_release_override(
         actor,
         note,
         expires_at=expires_at,
+    )
+    ledger.save(ledger_path)
+    return record
+
+
+def revoke_release_override(
+    release_name: str,
+    *,
+    environment: str,
+    blocker: str,
+    actor: str,
+    note: str = "",
+    ledger_path: Path,
+) -> ReleaseRecord:
+    ledger = ReleaseLedger.load(ledger_path)
+    record = ledger.revoke_override(
+        release_name,
+        environment,
+        blocker,
+        actor,
+        note,
     )
     ledger.save(ledger_path)
     return record

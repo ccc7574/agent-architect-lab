@@ -27,6 +27,7 @@ from agent_architect_lab.harness.ledger import (
     list_active_overrides,
     list_releases,
     record_release_candidate,
+    revoke_release_override,
     rollback_release,
     transition_release,
 )
@@ -137,6 +138,13 @@ def build_parser() -> argparse.ArgumentParser:
     override_release.add_argument("--by", required=True, help="Operator identity.")
     override_release.add_argument("--note", default="", help="Optional override justification.")
     override_release.add_argument("--expires-at", default="", help="Optional absolute expiry timestamp in ISO-8601 format.")
+
+    revoke_override_release = subparsers.add_parser("revoke-release-override", help="Revoke a previously granted override for a release in a specific environment.")
+    revoke_override_release.add_argument("release_name", help="Immutable release name.")
+    revoke_override_release.add_argument("--environment", required=True, help="Deployment environment where the override applies.")
+    revoke_override_release.add_argument("--blocker", required=True, help="Exact blocker string to revoke.")
+    revoke_override_release.add_argument("--by", required=True, help="Operator identity.")
+    revoke_override_release.add_argument("--note", default="", help="Optional revoke justification.")
 
     reject_release = subparsers.add_parser("reject-release", help="Reject a pending or approved release in the release ledger.")
     reject_release.add_argument("release_name", help="Immutable release name.")
@@ -469,6 +477,26 @@ def cmd_grant_release_override(
     return 0
 
 
+def cmd_revoke_release_override(
+    release_name: str,
+    environment: str,
+    blocker: str,
+    actor: str,
+    note: str,
+) -> int:
+    settings = load_settings()
+    record = revoke_release_override(
+        release_name,
+        environment=environment,
+        blocker=blocker,
+        actor=actor,
+        note=note,
+        ledger_path=settings.release_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
 def cmd_reject_release(release_name: str, actor: str, note: str) -> int:
     settings = load_settings()
     record = transition_release(
@@ -721,6 +749,14 @@ def main() -> int:
             args.by,
             args.note,
             args.expires_at,
+        )
+    if args.command == "revoke-release-override":
+        return cmd_revoke_release_override(
+            args.release_name,
+            args.environment,
+            args.blocker,
+            args.by,
+            args.note,
         )
     if args.command == "reject-release":
         return cmd_reject_release(args.release_name, args.by, args.note)
