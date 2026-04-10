@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
 from agent_architect_lab.harness.incidents import (
@@ -125,6 +128,77 @@ def build_governance_summary_payload(
 class ControlPlaneResponse:
     status_code: int
     payload: dict[str, Any]
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class IdempotencyRecord:
+    idempotency_key: str
+    method: str
+    path: str
+    request_fingerprint: str
+    operation_id: str
+    committed_at: str
+    status_code: int
+    response_payload: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "idempotency_key": self.idempotency_key,
+            "method": self.method,
+            "path": self.path,
+            "request_fingerprint": self.request_fingerprint,
+            "operation_id": self.operation_id,
+            "committed_at": self.committed_at,
+            "status_code": self.status_code,
+            "response_payload": self.response_payload,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "IdempotencyRecord":
+        return cls(
+            idempotency_key=str(payload["idempotency_key"]),
+            method=str(payload["method"]),
+            path=str(payload["path"]),
+            request_fingerprint=str(payload["request_fingerprint"]),
+            operation_id=str(payload["operation_id"]),
+            committed_at=str(payload["committed_at"]),
+            status_code=int(payload["status_code"]),
+            response_payload=dict(payload["response_payload"]),
+        )
+
+
+@dataclass(slots=True)
+class IdempotencyRegistry:
+    records: dict[str, IdempotencyRecord] = field(default_factory=dict)
+
+    def get(self, idempotency_key: str) -> IdempotencyRecord | None:
+        return self.records.get(idempotency_key)
+
+    def set(self, record: IdempotencyRecord) -> None:
+        self.records[record.idempotency_key] = record
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "records": {
+                key: record.to_dict()
+                for key, record in sorted(self.records.items())
+            }
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: Path) -> "IdempotencyRegistry":
+        if not path.exists():
+            return cls()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return cls(
+            records={
+                key: IdempotencyRecord.from_dict(record)
+                for key, record in payload.get("records", {}).items()
+            }
+        )
 
 
 @dataclass(slots=True)
@@ -255,34 +329,44 @@ class ControlPlaneApp:
                 auth_error = self.auth.authorize("write", headers)
                 if auth_error is not None:
                     return auth_error
-                payload = _load_json_body(body)
-                record = open_incident(
-                    severity=_required_string(payload, "severity"),
-                    summary=_required_string(payload, "summary"),
-                    owner=_required_string(payload, "owner"),
-                    environment=_optional_string(payload, "environment"),
-                    release_name=_optional_string(payload, "release_name"),
-                    source_report_path=_optional_string(payload, "source_report_path"),
-                    note=_optional_string(payload, "note") or "",
-                    ledger_path=self.settings.incident_ledger_path,
+                return self._execute_mutation(
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: open_incident(
+                        severity=_required_string(payload, "severity"),
+                        summary=_required_string(payload, "summary"),
+                        owner=_required_string(payload, "owner"),
+                        environment=_optional_string(payload, "environment"),
+                        release_name=_optional_string(payload, "release_name"),
+                        source_report_path=_optional_string(payload, "source_report_path"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.incident_ledger_path,
+                    ).to_dict(),
+                    success_status_code=201,
                 )
-                return ControlPlaneResponse(201, record.to_dict())
             transition_match = re.fullmatch(r"/incidents/([^/]+)/transition", path)
             if method == "POST" and transition_match is not None:
                 auth_error = self.auth.authorize("write", headers)
                 if auth_error is not None:
                     return auth_error
-                payload = _load_json_body(body)
-                record = transition_incident(
-                    transition_match.group(1),
-                    status=_required_string(payload, "status"),
-                    actor=_required_string(payload, "by"),
-                    note=_optional_string(payload, "note") or "",
-                    owner=_optional_string(payload, "owner"),
-                    followup_eval_path=_optional_string(payload, "followup_eval_path"),
-                    ledger_path=self.settings.incident_ledger_path,
+                return self._execute_mutation(
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: transition_incident(
+                        transition_match.group(1),
+                        status=_required_string(payload, "status"),
+                        actor=_required_string(payload, "by"),
+                        note=_optional_string(payload, "note") or "",
+                        owner=_optional_string(payload, "owner"),
+                        followup_eval_path=_optional_string(payload, "followup_eval_path"),
+                        ledger_path=self.settings.incident_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
                 )
-                return ControlPlaneResponse(200, record.to_dict())
             return _error_response(404, "not_found", f"Route '{path}' is not defined.")
         except json.JSONDecodeError:
             return _error_response(400, "invalid_json", "Request body must be valid JSON.")
@@ -290,6 +374,160 @@ class ControlPlaneApp:
             return _error_response(404, "not_found", str(exc))
         except ValueError as exc:
             return _error_response(400, "invalid_request", str(exc))
+
+    def _execute_mutation(
+        self,
+        *,
+        method: str,
+        path: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        handler: Any,
+        success_status_code: int,
+    ) -> ControlPlaneResponse:
+        idempotency_key = _required_idempotency_key(headers)
+        request_fingerprint = _request_fingerprint(method, path, body)
+        registry = IdempotencyRegistry.load(self.settings.control_plane_idempotency_path)
+        existing = registry.get(idempotency_key)
+        if existing is not None:
+            if existing.request_fingerprint != request_fingerprint:
+                response = _error_response(
+                    409,
+                    "idempotency_conflict",
+                    "Idempotency-Key has already been used for a different request payload.",
+                )
+                self._append_mutation_audit(
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    response=response,
+                    operation_id=existing.operation_id,
+                    replayed=False,
+                    conflict=True,
+                )
+                return response
+            response = self._build_mutation_response(
+                status_code=existing.status_code,
+                payload=existing.response_payload,
+                operation_id=existing.operation_id,
+                idempotency_key=idempotency_key,
+                replayed=True,
+                committed_at=existing.committed_at,
+            )
+            self._append_mutation_audit(
+                method=method,
+                path=path,
+                headers=headers,
+                body=body,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+                response=response,
+                operation_id=existing.operation_id,
+                replayed=True,
+                conflict=False,
+            )
+            return response
+
+        payload = _load_json_body(body)
+        result_payload = handler(payload)
+        operation_id = f"op-{uuid4().hex[:12]}"
+        committed_at = utc_now_iso()
+        response = self._build_mutation_response(
+            status_code=success_status_code,
+            payload=result_payload,
+            operation_id=operation_id,
+            idempotency_key=idempotency_key,
+            replayed=False,
+            committed_at=committed_at,
+        )
+        registry.set(
+            IdempotencyRecord(
+                idempotency_key=idempotency_key,
+                method=method,
+                path=path,
+                request_fingerprint=request_fingerprint,
+                operation_id=operation_id,
+                committed_at=committed_at,
+                status_code=response.status_code,
+                response_payload=response.payload,
+            )
+        )
+        registry.save(self.settings.control_plane_idempotency_path)
+        self._append_mutation_audit(
+            method=method,
+            path=path,
+            headers=headers,
+            body=body,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            response=response,
+            operation_id=operation_id,
+            replayed=False,
+            conflict=False,
+        )
+        return response
+
+    def _build_mutation_response(
+        self,
+        *,
+        status_code: int,
+        payload: dict[str, Any],
+        operation_id: str,
+        idempotency_key: str,
+        replayed: bool,
+        committed_at: str,
+    ) -> ControlPlaneResponse:
+        response_payload = dict(payload)
+        response_payload["_control_plane"] = {
+            "operation_id": operation_id,
+            "idempotency_key": idempotency_key,
+            "replayed": replayed,
+            "committed_at": committed_at,
+        }
+        return ControlPlaneResponse(
+            status_code=status_code,
+            payload=response_payload,
+            headers={
+                "X-Control-Plane-Operation-Id": operation_id,
+                "X-Idempotent-Replay": "true" if replayed else "false",
+            },
+        )
+
+    def _append_mutation_audit(
+        self,
+        *,
+        method: str,
+        path: str,
+        headers: Mapping[str, str],
+        body: bytes,
+        idempotency_key: str,
+        request_fingerprint: str,
+        response: ControlPlaneResponse,
+        operation_id: str,
+        replayed: bool,
+        conflict: bool,
+    ) -> None:
+        self.settings.control_plane_request_log_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_entry = {
+            "audit_event_id": f"audit-{uuid4().hex[:12]}",
+            "occurred_at": utc_now_iso(),
+            "operation_id": operation_id,
+            "method": method,
+            "path": path,
+            "idempotency_key": idempotency_key,
+            "request_fingerprint": request_fingerprint,
+            "token_fingerprint": _token_fingerprint(headers.get("Authorization", "")),
+            "request_body": _audit_request_body(body),
+            "status_code": response.status_code,
+            "response_payload": response.payload,
+            "replayed": replayed,
+            "conflict": conflict,
+        }
+        with self.settings.control_plane_request_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(audit_entry, sort_keys=True) + "\n")
 
 
 class ControlPlaneHTTPServer(ThreadingHTTPServer):
@@ -340,6 +578,8 @@ def _build_handler(app: ControlPlaneApp) -> type[BaseHTTPRequestHandler]:
             self.send_response(response.status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
+            for key, value in response.headers.items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -369,6 +609,16 @@ def _extract_bearer_token(header_value: str) -> str | None:
     return token or None
 
 
+def _required_idempotency_key(headers: Mapping[str, str]) -> str:
+    for key, value in headers.items():
+        if key.lower() == "idempotency-key":
+            candidate = value.strip()
+            if candidate:
+                return candidate
+            break
+    raise ValueError("Header 'Idempotency-Key' is required for mutation routes.")
+
+
 def _load_json_body(body: bytes) -> dict[str, Any]:
     if not body:
         return {}
@@ -376,6 +626,32 @@ def _load_json_body(body: bytes) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Request body must be a JSON object.")
     return payload
+
+
+def _audit_request_body(body: bytes) -> dict[str, Any] | dict[str, str]:
+    if not body:
+        return {}
+    try:
+        return _load_json_body(body)
+    except (json.JSONDecodeError, ValueError):
+        return {"raw": body.decode("utf-8", errors="replace")}
+
+
+def _request_fingerprint(method: str, path: str, body: bytes) -> str:
+    digest = hashlib.sha256()
+    digest.update(method.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(body)
+    return digest.hexdigest()
+
+
+def _token_fingerprint(header_value: str) -> str | None:
+    token = _extract_bearer_token(header_value)
+    if not token:
+        return None
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
 def _required_string(payload: Mapping[str, Any], key: str) -> str:

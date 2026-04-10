@@ -25,7 +25,11 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 - 读接口接受 `Authorization: Bearer <read-token>`
 - 读接口也接受 mutation token
 - 写接口必须使用 `Authorization: Bearer <mutation-token>`
+- 写接口还必须带上 `Idempotency-Key: <key>`
 - 如果没有配置 `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN`，所有写接口都会返回 `503`
+- 成功的写请求会按 idempotency key 缓存首个响应，后续重试直接重放
+- mutation 审计日志会追加写入 `artifacts/control-plane/mutation-requests.jsonl`
+- idempotency 状态会持久化到 `artifacts/control-plane/idempotency-registry.json`
 
 ## 路由清单
 
@@ -58,6 +62,7 @@ curl \
 curl \
   -X POST \
   -H "Authorization: Bearer writer-token" \
+  -H "Idempotency-Key: incident-open-20260410-001" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/incidents/open \
   -d '{
@@ -77,6 +82,7 @@ curl \
 curl \
   -X POST \
   -H "Authorization: Bearer writer-token" \
+  -H "Idempotency-Key: incident-transition-20260410-001" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/incidents/incident-20260410abcd1234/transition \
   -d '{
@@ -95,5 +101,6 @@ curl \
 - 当前写接口只覆盖 incident 创建与状态推进
 - 存储仍然是本地 artifact JSON，而不是外部数据库
 - 权限还是 token 级别，还没有做到 role-aware policy enforcement
+- 现在已经有幂等和审计，但还没有后台队列、分布式锁和更强的一致性协调
 
 这意味着它已经足够像一套内部生产治理服务，可以支撑本地演练和内部工具接入，同时仍然保持依赖轻、容易测试。

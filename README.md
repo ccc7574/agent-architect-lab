@@ -190,6 +190,8 @@ Use `run-control-plane-server` to expose the same governance layer over HTTP for
 Control-plane bind settings come from `AGENT_ARCHITECT_LAB_CONTROL_PLANE_HOST` and `AGENT_ARCHITECT_LAB_CONTROL_PLANE_PORT`, which default to `127.0.0.1` and `8080`.
 Read routes can be protected with `AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN`.
 State-changing routes require `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN`; if it is unset, write routes return `503`.
+State-changing routes also require an `Idempotency-Key` header. The first successful mutation response is stored and replayed for safe retries.
+Control-plane mutation audits are written under `artifacts/control-plane/mutation-requests.jsonl`, and idempotency state is stored under `artifacts/control-plane/idempotency-registry.json`.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.

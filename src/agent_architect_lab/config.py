@@ -12,6 +12,9 @@ from tempfile import gettempdir
 class Settings:
     project_root: Path
     artifacts_dir: Path
+    control_plane_dir: Path
+    control_plane_request_log_path: Path
+    control_plane_idempotency_path: Path
     traces_dir: Path
     reports_dir: Path
     checkpoints_dir: Path
@@ -57,6 +60,9 @@ def load_settings() -> Settings:
     artifacts_dir = Path(
         os.environ.get("AGENT_ARCHITECT_LAB_ARTIFACTS", _default_artifacts_dir(project_root))
     ).resolve()
+    control_plane_dir = artifacts_dir / "control-plane"
+    control_plane_request_log_path = control_plane_dir / "mutation-requests.jsonl"
+    control_plane_idempotency_path = control_plane_dir / "idempotency-registry.json"
     traces_dir = artifacts_dir / "traces"
     reports_dir = artifacts_dir / "reports"
     checkpoints_dir = artifacts_dir / "checkpoints"
@@ -154,6 +160,7 @@ def load_settings() -> Settings:
 
     for directory in (
         artifacts_dir,
+        control_plane_dir,
         traces_dir,
         reports_dir,
         checkpoints_dir,
@@ -170,6 +177,9 @@ def load_settings() -> Settings:
     return Settings(
         project_root=project_root,
         artifacts_dir=artifacts_dir,
+        control_plane_dir=control_plane_dir,
+        control_plane_request_log_path=control_plane_request_log_path,
+        control_plane_idempotency_path=control_plane_idempotency_path,
         traces_dir=traces_dir,
         reports_dir=reports_dir,
         checkpoints_dir=checkpoints_dir,

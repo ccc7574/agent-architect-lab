@@ -25,7 +25,11 @@ The server is stdlib-only and keeps artifact storage exactly where the CLI keeps
 - Read routes accept `Authorization: Bearer <read-token>`
 - Read routes also accept the mutation token
 - Mutation routes require `Authorization: Bearer <mutation-token>`
+- Mutation routes also require `Idempotency-Key: <key>`
 - If `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN` is unset, mutation routes return `503`
+- Successful mutation responses are cached by idempotency key and replayed on retries
+- Mutation request audits are appended to `artifacts/control-plane/mutation-requests.jsonl`
+- Idempotency registry state is persisted in `artifacts/control-plane/idempotency-registry.json`
 
 ## Routes
 
@@ -58,6 +62,7 @@ Open an incident:
 curl \
   -X POST \
   -H "Authorization: Bearer writer-token" \
+  -H "Idempotency-Key: incident-open-20260410-001" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/incidents/open \
   -d '{
@@ -77,6 +82,7 @@ Transition an incident:
 curl \
   -X POST \
   -H "Authorization: Bearer writer-token" \
+  -H "Idempotency-Key: incident-transition-20260410-001" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/incidents/incident-20260410abcd1234/transition \
   -d '{
@@ -95,5 +101,6 @@ This control plane is intentionally narrow:
 - write models currently cover incident creation and incident transition
 - storage is still local artifact-backed JSON, not an external database
 - access control is token-based, not yet role-aware policy enforcement
+- idempotency and audit exist, but there is no background queue or distributed lock coordination yet
 
 That makes it suitable for local production-style drills and internal tooling, while keeping the repo dependency-light and testable.
