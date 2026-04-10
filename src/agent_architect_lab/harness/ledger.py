@@ -595,6 +595,26 @@ class OverrideReviewBoard:
 
 
 @dataclass(slots=True)
+class OperatorHandoff:
+    generated_at: str
+    environments: list[str]
+    release_risk_board: ReleaseRiskBoard
+    override_review_board: OverrideReviewBoard
+    active_overrides: list[ActiveOverrideEntry] = field(default_factory=list)
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "generated_at": self.generated_at,
+            "environments": self.environments,
+            "release_risk_board": self.release_risk_board.to_dict(),
+            "override_review_board": self.override_review_board.to_dict(),
+            "active_overrides": [entry.to_dict() for entry in self.active_overrides],
+            "summary": self.summary,
+        }
+
+
+@dataclass(slots=True)
 class ReleaseLedger:
     records: list[ReleaseRecord] = field(default_factory=list)
 
@@ -956,6 +976,45 @@ class ReleaseLedger:
             )
         )
         return OverrideReviewBoard(rows=rows[:limit])
+
+    def operator_handoff(
+        self,
+        *,
+        environments: list[str],
+        production_soak_minutes: int,
+        required_approver_roles: list[str],
+        environment_policies: dict[str, dict[str, object]],
+        environment_freeze_windows: dict[str, list[str]],
+        override_expiring_soon_minutes: int,
+        release_limit: int,
+        override_limit: int,
+    ) -> OperatorHandoff:
+        release_risk_board = self.release_risk_board(
+            environments=environments,
+            production_soak_minutes=production_soak_minutes,
+            required_approver_roles=required_approver_roles,
+            environment_policies=environment_policies,
+            environment_freeze_windows=environment_freeze_windows,
+            override_expiring_soon_minutes=override_expiring_soon_minutes,
+            limit=release_limit,
+        )
+        override_review_board = self.override_review_board(
+            override_expiring_soon_minutes=override_expiring_soon_minutes,
+            limit=override_limit,
+        )
+        active_overrides = self.active_overrides(limit=override_limit)
+        summary = _build_operator_handoff_summary(
+            release_risk_board=release_risk_board,
+            override_review_board=override_review_board,
+        )
+        return OperatorHandoff(
+            generated_at=utc_now_iso(),
+            environments=list(environments),
+            release_risk_board=release_risk_board,
+            override_review_board=override_review_board,
+            active_overrides=active_overrides,
+            summary=summary,
+        )
 
     def deploy_readiness(
         self,
@@ -1604,6 +1663,25 @@ def _release_board_next_action(
     return "observe_release"
 
 
+def _build_operator_handoff_summary(
+    *,
+    release_risk_board: ReleaseRiskBoard,
+    override_review_board: OverrideReviewBoard,
+) -> str:
+    high_risk_releases = [row.release_name for row in release_risk_board.rows if row.risk_level == "high"]
+    expired_overrides = [row for row in override_review_board.rows if row.status == "expired"]
+    expiring_overrides = [row for row in override_review_board.rows if row.status == "expiring_soon"]
+    if high_risk_releases:
+        summary = "High-risk releases: " + ", ".join(high_risk_releases) + "."
+    else:
+        summary = "No high-risk releases in the current handoff window."
+    if expired_overrides:
+        summary += f" {len(expired_overrides)} override(s) already expired."
+    if expiring_overrides:
+        summary += f" {len(expiring_overrides)} override(s) are expiring soon."
+    return summary
+
+
 def _latest_timestamp(*timestamps: str | None) -> str:
     present = [timestamp for timestamp in timestamps if timestamp]
     if not present:
@@ -1933,6 +2011,31 @@ def get_override_review_board(
         environment=environment,
         override_expiring_soon_minutes=override_expiring_soon_minutes,
         limit=limit,
+    )
+
+
+def get_operator_handoff(
+    *,
+    environments: list[str],
+    ledger_path: Path,
+    production_soak_minutes: int = 30,
+    required_approver_roles: list[str] | None = None,
+    environment_policies: dict[str, dict[str, object]] | None = None,
+    environment_freeze_windows: dict[str, list[str]] | None = None,
+    override_expiring_soon_minutes: int = 120,
+    release_limit: int = 20,
+    override_limit: int = 50,
+) -> OperatorHandoff:
+    ledger = ReleaseLedger.load(ledger_path)
+    return ledger.operator_handoff(
+        environments=list(environments),
+        production_soak_minutes=production_soak_minutes,
+        required_approver_roles=list(required_approver_roles or []),
+        environment_policies=dict(environment_policies or {}),
+        environment_freeze_windows=dict(environment_freeze_windows or {}),
+        override_expiring_soon_minutes=override_expiring_soon_minutes,
+        release_limit=release_limit,
+        override_limit=override_limit,
     )
 
 

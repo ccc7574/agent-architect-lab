@@ -17,6 +17,7 @@ from agent_architect_lab.harness.ledger import (
     deploy_release,
     get_environment_history,
     get_override_review_board,
+    get_operator_handoff,
     get_release_readiness_digest,
     get_release_risk_board,
     get_rollout_matrix,
@@ -201,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
     override_review_board_cmd.add_argument("--release-name", default="", help="Optional release filter.")
     override_review_board_cmd.add_argument("--environment", default="", help="Optional environment filter.")
     override_review_board_cmd.add_argument("--limit", type=int, default=50, help="Maximum number of override rows to include.")
+
+    operator_handoff_cmd = subparsers.add_parser("operator-handoff", help="Generate a combined handoff payload for release/oncall shifts.")
+    operator_handoff_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
+    operator_handoff_cmd.add_argument("--release-limit", type=int, default=20, help="Maximum number of releases to include in the risk board.")
+    operator_handoff_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum number of overrides to include in override sections.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -631,6 +637,23 @@ def cmd_override_review_board(release_name: str, environment: str, limit: int) -
     return 0
 
 
+def cmd_operator_handoff(environments: list[str], release_limit: int, override_limit: int) -> int:
+    settings = load_settings()
+    handoff = get_operator_handoff(
+        environments=environments or settings.environment_names,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        release_limit=release_limit,
+        override_limit=override_limit,
+    )
+    print(json.dumps(handoff.to_dict(), indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -780,6 +803,8 @@ def main() -> int:
         return cmd_release_risk_board(args.environments, args.limit)
     if args.command == "override-review-board":
         return cmd_override_review_board(args.release_name, args.environment, args.limit)
+    if args.command == "operator-handoff":
+        return cmd_operator_handoff(args.environments, args.release_limit, args.override_limit)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":

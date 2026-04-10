@@ -128,6 +128,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override \
   --note "incident closed"
 ```
 
+生成班次交接快照：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
+```
+
 查看当前环境策略：
 
 ```bash
@@ -334,6 +340,17 @@ override 只用于紧急场景，不应该替代正常流程。
 - override 不再影响 readiness 计算
 - 它不会再出现在 `list-active-overrides`
 - 它仍然保留在 `release-status` 中，供审计追踪
+
+## operator handoff
+
+`operator-handoff` 是面向交接班的聚合快照。
+
+它会把以下内容合并到一份 payload 中：
+
+- `release-risk-board`
+- `override-review-board`
+- 当前生效的 `active_overrides`
+- 一条面向下一位值班人员的 summary
 
 ## 推荐运维流程
 

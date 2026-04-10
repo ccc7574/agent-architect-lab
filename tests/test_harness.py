@@ -12,6 +12,7 @@ from agent_architect_lab.harness.ledger import (
     get_deploy_policy,
     get_environment_history,
     get_override_review_board,
+    get_operator_handoff,
     get_release_readiness_digest,
     get_release_risk_board,
     get_rollout_matrix,
@@ -1396,3 +1397,57 @@ def test_override_review_board_prioritizes_expired_and_expiring_entries(tmp_path
     assert board.rows[0].recommended_action == "remove_or_renew_override"
     assert board.rows[1].recommended_action == "review_override_expiry"
     assert board.rows[2].recommended_action == "add_override_expiry"
+
+
+def test_operator_handoff_combines_release_and_override_views(tmp_path: Path) -> None:
+    releases_dir = tmp_path / "releases"
+    review = ReleaseShadowReview(
+        passed=True,
+        suites=["safety"],
+        suite_results=[],
+        blockers=[],
+        warnings=[],
+        policy_findings=[],
+        recommended_action="promote",
+        summary="ready",
+        baseline_sources={"safety": "registry"},
+    )
+    record_release_candidate(review, release_name="release-low", report_prefix="low", releases_dir=releases_dir)
+    record_release_candidate(review, release_name="release-high", report_prefix="high", releases_dir=releases_dir)
+    ledger_path = releases_dir / "release-ledger.json"
+    transition_release("release-low", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    transition_release("release-low", action="approve", actor="release-manager", role="release-manager", note="approved", ledger_path=ledger_path)
+    transition_release("release-high", action="approve", actor="qa-owner", note="approved", ledger_path=ledger_path)
+    deploy_release(
+        "release-low",
+        environment="staging",
+        actor="release-manager",
+        note="deploy staging",
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=[],
+    )
+    grant_release_override(
+        "release-high",
+        environment="production",
+        blocker="environment_frozen",
+        actor="incident-commander",
+        note="expiring",
+        expires_at="2999-01-01T00:30:00+00:00",
+        ledger_path=ledger_path,
+    )
+
+    handoff = get_operator_handoff(
+        environments=["staging", "production"],
+        ledger_path=ledger_path,
+        production_soak_minutes=0,
+        required_approver_roles=["qa-owner", "release-manager"],
+        override_expiring_soon_minutes=999999999,
+        release_limit=10,
+        override_limit=10,
+    )
+
+    assert handoff.release_risk_board.rows[0].release_name == "release-high"
+    assert handoff.override_review_board.rows[0].status == "expiring_soon"
+    assert len(handoff.active_overrides) == 1
+    assert "High-risk releases: release-high." in handoff.summary

@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_list_active_overrides,
     cmd_list_skills,
     cmd_list_releases,
+    cmd_operator_handoff,
     cmd_override_review_board,
     cmd_promote_release,
     cmd_register_report,
@@ -585,3 +586,38 @@ def test_cmd_override_review_board_reports_remediation_priority(monkeypatch, tmp
     assert payload["rows"][0]["recommended_action"] == "remove_or_renew_override"
     assert payload["rows"][1]["status"] == "active_no_expiry"
     assert payload["rows"][1]["recommended_action"] == "add_override_expiry"
+
+
+def test_cmd_operator_handoff_reports_combined_shift_payload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-low", "", True, "", "release-low")
+        cmd_approve_release("release-low", "qa-owner", "", "approved")
+        cmd_approve_release("release-low", "release-manager", "release-manager", "approved")
+        cmd_deploy_release("release-low", "staging", "release-manager", "deploy staging")
+        cmd_run_release_shadow(["safety"], "release-high", "", True, "", "release-high")
+        cmd_approve_release("release-high", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-high",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "expiring",
+            "2999-01-01T00:30:00+00:00",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_operator_handoff([], 10, 10)
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["release_risk_board"]["rows"][0]["release_name"] == "release-high"
+    assert payload["override_review_board"]["rows"][0]["status"] == "expiring_soon"
+    assert len(payload["active_overrides"]) == 1
+    assert "High-risk releases: release-high." in payload["summary"]

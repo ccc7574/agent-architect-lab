@@ -61,6 +61,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli release-risk-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --environment production
 PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override 2026-04-10-main --environment production --blocker environment_frozen --by release-manager --note "incident closed"
+PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
@@ -160,6 +161,7 @@ Use `release-readiness-digest <release_name>` as the operator-facing summary vie
 Use `release-risk-board` to rank multiple recorded releases by operator risk so oncall can decide what to inspect first.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
+Use `operator-handoff` to generate a combined shift handoff payload containing release risk, override remediation, active overrides, and a summary line for the next operator.
 
 ## Planner Providers
 
