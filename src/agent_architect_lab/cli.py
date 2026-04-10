@@ -215,6 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
     record_handoff_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum number of overrides to include in override sections.")
     record_handoff_cmd.add_argument("--label", default="", help="Optional label included in the saved file name.")
 
+    list_handoffs_cmd = subparsers.add_parser("list-operator-handoffs", help="List saved operator handoff snapshots for shift history and audits.")
+    list_handoffs_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of saved handoff snapshots to return.")
+
+    show_handoff_cmd = subparsers.add_parser("show-operator-handoff", help="Show one saved operator handoff snapshot by file name or the latest snapshot.")
+    show_handoff_cmd.add_argument("snapshot", nargs="?", default="", help="Snapshot file name under artifacts/handoffs or an absolute path.")
+    show_handoff_cmd.add_argument("--latest", action="store_true", help="Load the most recently generated handoff snapshot.")
+
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
     rollout_matrix_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
@@ -689,6 +696,70 @@ def cmd_record_operator_handoff(
     return 0
 
 
+def _load_operator_handoff_snapshots(handoffs_dir: Path) -> list[tuple[Path, dict]]:
+    snapshots: list[tuple[Path, dict]] = []
+    for path in handoffs_dir.glob("operator-handoff-*.json"):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        snapshots.append((path, payload))
+    snapshots.sort(key=lambda item: (str(item[1].get("generated_at", "")), item[0].name), reverse=True)
+    return snapshots
+
+
+def _build_operator_handoff_history_row(path: Path, payload: dict) -> dict:
+    release_rows = payload.get("release_risk_board", {}).get("rows", [])
+    high_risk_releases = [
+        str(row.get("release_name"))
+        for row in release_rows
+        if row.get("risk_level") == "high" and row.get("release_name")
+    ]
+    return {
+        "saved_to": str(path),
+        "file_name": path.name,
+        "generated_at": payload.get("generated_at"),
+        "environments": payload.get("environments", []),
+        "release_count": len(release_rows),
+        "high_risk_releases": high_risk_releases,
+        "override_review_count": len(payload.get("override_review_board", {}).get("rows", [])),
+        "active_override_count": len(payload.get("active_overrides", [])),
+        "summary": payload.get("summary", ""),
+    }
+
+
+def cmd_list_operator_handoffs(limit: int) -> int:
+    settings = load_settings()
+    snapshots = _load_operator_handoff_snapshots(settings.handoffs_dir)
+    rows = [
+        _build_operator_handoff_history_row(path, payload)
+        for path, payload in snapshots[: max(limit, 0)]
+    ]
+    print(json.dumps({"rows": rows, "total": len(snapshots)}, indent=2))
+    return 0
+
+
+def cmd_show_operator_handoff(snapshot: str, latest: bool) -> int:
+    settings = load_settings()
+    if latest:
+        snapshots = _load_operator_handoff_snapshots(settings.handoffs_dir)
+        if not snapshots:
+            print(json.dumps({"error": "No saved operator handoff snapshots found."}, indent=2))
+            return 1
+        path, payload = snapshots[0]
+    else:
+        if not snapshot:
+            print(json.dumps({"error": "snapshot is required unless --latest is provided."}, indent=2))
+            return 1
+        path = Path(snapshot)
+        if not path.is_absolute():
+            path = settings.handoffs_dir / snapshot
+        if not path.exists():
+            print(json.dumps({"error": f"Operator handoff snapshot not found: {path}"}, indent=2))
+            return 1
+        payload = json.loads(path.read_text(encoding="utf-8"))
+
+    print(json.dumps({"saved_to": str(path), "handoff": payload}, indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -842,6 +913,10 @@ def main() -> int:
         return cmd_operator_handoff(args.environments, args.release_limit, args.override_limit)
     if args.command == "record-operator-handoff":
         return cmd_record_operator_handoff(args.environments, args.release_limit, args.override_limit, args.label)
+    if args.command == "list-operator-handoffs":
+        return cmd_list_operator_handoffs(args.limit)
+    if args.command == "show-operator-handoff":
+        return cmd_show_operator_handoff(args.snapshot, args.latest)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":

@@ -185,6 +185,18 @@ Persist an operator handoff snapshot to artifacts:
 PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --label night-shift
 ```
 
+List recent operator handoff snapshots:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
+```
+
+Load the latest saved handoff snapshot:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
+```
+
 Grant a temporary override for a specific blocker:
 
 ```bash
@@ -220,6 +232,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli override-review-board
 PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override 2026-04-10-main --environment production --blocker environment_frozen --by release-manager
 PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
 PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --label night-shift
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
+PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
@@ -236,6 +250,7 @@ Overrides are scoped to one release, one environment, and one exact blocker stri
 `revoke-release-override` marks the latest matching override as revoked. Revoked overrides stop affecting readiness checks and stop appearing in active override views, but remain in `release-status` for audit history.
 `operator-handoff` packages the risk board, override review board, and active override list into a single shift handoff payload with a generated summary.
 `record-operator-handoff` writes that payload to `artifacts/handoffs` so handoff state can be preserved between shifts.
+`list-operator-handoffs` provides a compact shift-history index, and `show-operator-handoff --latest` reloads the latest saved handoff without requiring operators to inspect the artifact directory manually.
 
 ## Why This Matters
 

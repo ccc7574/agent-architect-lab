@@ -15,6 +15,7 @@ from agent_architect_lab.cli import (
     cmd_explain_patterns,
     cmd_grant_release_override,
     cmd_list_active_overrides,
+    cmd_list_operator_handoffs,
     cmd_list_skills,
     cmd_list_releases,
     cmd_operator_handoff,
@@ -30,6 +31,7 @@ from agent_architect_lab.cli import (
     cmd_release_status,
     cmd_run_evals,
     cmd_run_release_shadow,
+    cmd_show_operator_handoff,
 )
 
 
@@ -641,4 +643,72 @@ def test_cmd_record_operator_handoff_saves_snapshot(monkeypatch, tmp_path: Path)
     assert exit_code == 0
     assert saved_path.exists()
     assert "night-shift" in saved_path.name
+    assert payload["handoff"]["release_risk_board"]["rows"][0]["release_name"] == "release-a"
+
+
+def test_cmd_list_operator_handoffs_reports_latest_first(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-high", "", True, "", "release-high")
+        cmd_approve_release("release-high", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-high",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "expiring",
+            "2999-01-01T00:30:00+00:00",
+        )
+
+    first_buffer = io.StringIO()
+    with redirect_stdout(first_buffer):
+        first_exit = cmd_record_operator_handoff([], 10, 10, "day-shift")
+    first_payload = json.loads(first_buffer.getvalue())
+
+    second_buffer = io.StringIO()
+    with redirect_stdout(second_buffer):
+        second_exit = cmd_record_operator_handoff([], 10, 10, "night-shift")
+    second_payload = json.loads(second_buffer.getvalue())
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_list_operator_handoffs(10)
+    payload = json.loads(buffer.getvalue())
+
+    assert first_exit == 0
+    assert second_exit == 0
+    assert exit_code == 0
+    assert payload["total"] == 2
+    assert payload["rows"][0]["file_name"] == Path(second_payload["saved_to"]).name
+    assert payload["rows"][1]["file_name"] == Path(first_payload["saved_to"]).name
+    assert payload["rows"][0]["high_risk_releases"] == ["release-high"]
+    assert payload["rows"][0]["active_override_count"] == 1
+
+
+def test_cmd_show_operator_handoff_loads_latest_snapshot(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+
+    record_buffer = io.StringIO()
+    with redirect_stdout(record_buffer):
+        record_exit = cmd_record_operator_handoff([], 10, 10, "night-shift")
+    record_payload = json.loads(record_buffer.getvalue())
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_show_operator_handoff("", True)
+    payload = json.loads(buffer.getvalue())
+
+    assert record_exit == 0
+    assert exit_code == 0
+    assert payload["saved_to"] == record_payload["saved_to"]
     assert payload["handoff"]["release_risk_board"]["rows"][0]["release_name"] == "release-a"

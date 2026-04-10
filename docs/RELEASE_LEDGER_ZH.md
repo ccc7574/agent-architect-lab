@@ -140,6 +140,18 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
 PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --label night-shift
 ```
 
+查看最近的交接留档：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
+```
+
+读取最新一份交接快照：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
+```
+
 查看当前环境策略：
 
 ```bash
@@ -359,6 +371,7 @@ override 只用于紧急场景，不应该替代正常流程。
 - 一条面向下一位值班人员的 summary
 
 `record-operator-handoff` 会把这份 payload 保存到 `artifacts/handoffs`，方便交接留档和事后审计。
+`list-operator-handoffs` 提供交接历史索引，`show-operator-handoff --latest` 可以直接读取最新留档，不需要人工翻 artifacts 目录。
 
 ## 推荐运维流程
 
