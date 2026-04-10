@@ -134,6 +134,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli revoke-release-override \
 PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
 ```
 
+把交接快照落盘到 artifacts：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --label night-shift
+```
+
 查看当前环境策略：
 
 ```bash
@@ -351,6 +357,8 @@ override 只用于紧急场景，不应该替代正常流程。
 - `override-review-board`
 - 当前生效的 `active_overrides`
 - 一条面向下一位值班人员的 summary
+
+`record-operator-handoff` 会把这份 payload 保存到 `artifacts/handoffs`，方便交接留档和事后审计。
 
 ## 推荐运维流程
 

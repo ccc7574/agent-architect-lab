@@ -15,6 +15,7 @@ class Settings:
     traces_dir: Path
     reports_dir: Path
     checkpoints_dir: Path
+    handoffs_dir: Path
     releases_dir: Path
     release_manifests_dir: Path
     release_ledger_path: Path
@@ -50,6 +51,7 @@ def load_settings() -> Settings:
     traces_dir = artifacts_dir / "traces"
     reports_dir = artifacts_dir / "reports"
     checkpoints_dir = artifacts_dir / "checkpoints"
+    handoffs_dir = artifacts_dir / "handoffs"
     releases_dir = artifacts_dir / "releases"
     release_manifests_dir = releases_dir / "manifests"
     release_ledger_path = releases_dir / "release-ledger.json"
@@ -131,6 +133,7 @@ def load_settings() -> Settings:
         traces_dir,
         reports_dir,
         checkpoints_dir,
+        handoffs_dir,
         releases_dir,
         release_manifests_dir,
         notes_dir,
@@ -145,6 +148,7 @@ def load_settings() -> Settings:
         traces_dir=traces_dir,
         reports_dir=reports_dir,
         checkpoints_dir=checkpoints_dir,
+        handoffs_dir=handoffs_dir,
         releases_dir=releases_dir,
         release_manifests_dir=release_manifests_dir,
         release_ledger_path=release_ledger_path,

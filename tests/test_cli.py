@@ -20,6 +20,7 @@ from agent_architect_lab.cli import (
     cmd_operator_handoff,
     cmd_override_review_board,
     cmd_promote_release,
+    cmd_record_operator_handoff,
     cmd_register_report,
     cmd_revoke_release_override,
     cmd_release_readiness_digest,
@@ -621,3 +622,23 @@ def test_cmd_operator_handoff_reports_combined_shift_payload(monkeypatch, tmp_pa
     assert payload["override_review_board"]["rows"][0]["status"] == "expiring_soon"
     assert len(payload["active_overrides"]) == 1
     assert "High-risk releases: release-high." in payload["summary"]
+
+
+def test_cmd_record_operator_handoff_saves_snapshot(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_record_operator_handoff([], 10, 10, "night-shift")
+    payload = json.loads(buffer.getvalue())
+    saved_path = Path(payload["saved_to"])
+
+    assert exit_code == 0
+    assert saved_path.exists()
+    assert "night-shift" in saved_path.name
+    assert payload["handoff"]["release_risk_board"]["rows"][0]["release_name"] == "release-a"
