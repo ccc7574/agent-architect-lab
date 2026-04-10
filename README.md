@@ -66,6 +66,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
 PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --label night-shift
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
@@ -170,6 +171,7 @@ Use `revoke-release-override` to close an override without deleting its audit tr
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, override remediation, active overrides, and a summary line for the next operator.
 Use `record-operator-handoff` to persist that handoff snapshot under `artifacts/handoffs` for shift-history and audit trails.
 Use `list-operator-handoffs` and `show-operator-handoff --latest` to review prior shift snapshots without manually opening artifact files.
+Use `export-operator-handoff-report --latest` to render the saved handoff into a Markdown report suitable for shift transfer, incident review, or status sharing.
 
 ## Planner Providers
 

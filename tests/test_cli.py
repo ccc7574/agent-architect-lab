@@ -25,6 +25,7 @@ from agent_architect_lab.cli import (
     cmd_record_operator_handoff,
     cmd_register_report,
     cmd_revoke_release_override,
+    cmd_export_operator_handoff_report,
     cmd_release_readiness_digest,
     cmd_release_risk_board,
     cmd_rollout_matrix,
@@ -776,3 +777,46 @@ def test_cmd_show_operator_handoff_loads_latest_snapshot(monkeypatch, tmp_path: 
     assert exit_code == 0
     assert payload["saved_to"] == record_payload["saved_to"]
     assert payload["handoff"]["release_risk_board"]["rows"][0]["release_name"] == "release-a"
+
+
+def test_cmd_export_operator_handoff_report_writes_markdown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-high", "", True, "", "release-high")
+        cmd_approve_release("release-high", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-high",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "expiring",
+            "2999-01-01T00:30:00+00:00",
+        )
+
+    record_buffer = io.StringIO()
+    with redirect_stdout(record_buffer):
+        record_exit = cmd_record_operator_handoff([], 10, 10, "night-shift")
+    record_payload = json.loads(record_buffer.getvalue())
+    snapshot_path = Path(record_payload["saved_to"])
+
+    export_buffer = io.StringIO()
+    with redirect_stdout(export_buffer):
+        export_exit = cmd_export_operator_handoff_report("", True, "", "Night Shift Release Report")
+    export_payload = json.loads(export_buffer.getvalue())
+    markdown_path = Path(export_payload["saved_to"])
+    markdown = markdown_path.read_text(encoding="utf-8")
+
+    assert record_exit == 0
+    assert export_exit == 0
+    assert export_payload["source_snapshot"] == str(snapshot_path)
+    assert markdown_path.exists()
+    assert markdown_path.suffix == ".md"
+    assert "# Night Shift Release Report" in markdown
+    assert "## Approval Review Board" in markdown
+    assert "## Override Review Board" in markdown
+    assert "release-high" in markdown

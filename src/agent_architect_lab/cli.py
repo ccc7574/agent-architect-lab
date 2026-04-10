@@ -227,6 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
     show_handoff_cmd.add_argument("snapshot", nargs="?", default="", help="Snapshot file name under artifacts/handoffs or an absolute path.")
     show_handoff_cmd.add_argument("--latest", action="store_true", help="Load the most recently generated handoff snapshot.")
 
+    export_handoff_report_cmd = subparsers.add_parser("export-operator-handoff-report", help="Render a saved operator handoff snapshot as a Markdown report.")
+    export_handoff_report_cmd.add_argument("snapshot", nargs="?", default="", help="Snapshot file name under artifacts/handoffs or an absolute path.")
+    export_handoff_report_cmd.add_argument("--latest", action="store_true", help="Load the most recently generated handoff snapshot.")
+    export_handoff_report_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to the snapshot path with a .md suffix.")
+    export_handoff_report_cmd.add_argument("--title", default="", help="Optional report title override.")
+
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
     rollout_matrix_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
@@ -787,6 +793,180 @@ def cmd_show_operator_handoff(snapshot: str, latest: bool) -> int:
     return 0
 
 
+def _resolve_operator_handoff_snapshot(settings, snapshot: str, latest: bool) -> tuple[Path | None, dict | None, str | None]:
+    if latest:
+        snapshots = _load_operator_handoff_snapshots(settings.handoffs_dir)
+        if not snapshots:
+            return None, None, "No saved operator handoff snapshots found."
+        path, payload = snapshots[0]
+        return path, payload, None
+    if not snapshot:
+        return None, None, "snapshot is required unless --latest is provided."
+    path = Path(snapshot)
+    if not path.is_absolute():
+        path = settings.handoffs_dir / snapshot
+    if not path.exists():
+        return None, None, f"Operator handoff snapshot not found: {path}"
+    return path, json.loads(path.read_text(encoding="utf-8")), None
+
+
+def _markdown_cell(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, list):
+        text = ", ".join(str(item) for item in value) if value else "-"
+    elif isinstance(value, bool):
+        text = "yes" if value else "no"
+    else:
+        text = str(value)
+    return text.replace("|", "\\|").replace("\n", "<br>")
+
+
+def _render_markdown_table(headers: list[str], rows: list[list[object]]) -> list[str]:
+    if not rows:
+        return ["No items."]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(_markdown_cell(item) for item in row) + " |")
+    return lines
+
+
+def _render_operator_handoff_markdown(payload: dict, *, title: str) -> str:
+    release_rows = payload.get("release_risk_board", {}).get("rows", [])
+    approval_rows = payload.get("approval_review_board", {}).get("rows", [])
+    override_rows = payload.get("override_review_board", {}).get("rows", [])
+    active_overrides = payload.get("active_overrides", [])
+    lines = [
+        f"# {title}",
+        "",
+        f"- Generated at: {_markdown_cell(payload.get('generated_at'))}",
+        f"- Environments: {_markdown_cell(payload.get('environments', []))}",
+        "",
+        "## Executive Summary",
+        "",
+        payload.get("summary", "No summary available."),
+        "",
+        "## Release Risk Board",
+        "",
+    ]
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "State", "Risk", "Blocking Environments", "Stale", "Next Action"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("release_state"),
+                    row.get("risk_level"),
+                    row.get("blocking_environments", []),
+                    row.get("is_stale"),
+                    row.get("next_action"),
+                ]
+                for row in release_rows
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Approval Review Board",
+            "",
+        ]
+    )
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Status", "Risk", "Missing Roles", "Blocking Environments", "Recommended Action"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("status"),
+                    row.get("risk_level"),
+                    row.get("missing_roles", []),
+                    row.get("blocking_environments", []),
+                    row.get("recommended_action"),
+                ]
+                for row in approval_rows
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Override Review Board",
+            "",
+        ]
+    )
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Environment", "Blocker", "Status", "Risk", "Recommended Action"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("environment"),
+                    row.get("blocker"),
+                    row.get("status"),
+                    row.get("risk_level"),
+                    row.get("recommended_action"),
+                ]
+                for row in override_rows
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Active Overrides",
+            "",
+        ]
+    )
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Environment", "Blocker", "Actor", "Expires At"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("environment"),
+                    row.get("blocker"),
+                    row.get("actor"),
+                    row.get("expires_at"),
+                ]
+                for row in active_overrides
+            ],
+        )
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def cmd_export_operator_handoff_report(snapshot: str, latest: bool, output: str, title: str) -> int:
+    settings = load_settings()
+    source_path, payload, error = _resolve_operator_handoff_snapshot(settings, snapshot, latest)
+    if error is not None or source_path is None or payload is None:
+        print(json.dumps({"error": error or "Unknown snapshot resolution error."}, indent=2))
+        return 1
+
+    output_path = Path(output) if output else source_path.with_suffix(".md")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown = _render_operator_handoff_markdown(
+        payload,
+        title=title.strip() or "Operator Handoff Report",
+    )
+    output_path.write_text(markdown, encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "saved_to": str(output_path),
+                "source_snapshot": str(source_path),
+                "title": title.strip() or "Operator Handoff Report",
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -946,6 +1126,8 @@ def main() -> int:
         return cmd_list_operator_handoffs(args.limit)
     if args.command == "show-operator-handoff":
         return cmd_show_operator_handoff(args.snapshot, args.latest)
+    if args.command == "export-operator-handoff-report":
+        return cmd_export_operator_handoff_report(args.snapshot, args.latest, args.output, args.title)
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":

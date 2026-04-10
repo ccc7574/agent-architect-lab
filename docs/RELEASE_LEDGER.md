@@ -203,6 +203,12 @@ Load the latest saved handoff snapshot:
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 ```
 
+Render the latest handoff snapshot as a Markdown report:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
+```
+
 Grant a temporary override for a specific blocker:
 
 ```bash
@@ -241,6 +247,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli operator-handoff
 PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --label night-shift
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
@@ -261,6 +268,7 @@ Set `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to escalate long-idle approval 
 `operator-handoff` packages the risk board, approval review board, override review board, and active override list into a single shift handoff payload with a generated summary.
 `record-operator-handoff` writes that payload to `artifacts/handoffs` so handoff state can be preserved between shifts.
 `list-operator-handoffs` provides a compact shift-history index, and `show-operator-handoff --latest` reloads the latest saved handoff without requiring operators to inspect the artifact directory manually.
+`export-operator-handoff-report` renders a saved handoff snapshot into Markdown so the same operator state can be shared as a readable shift-transfer or incident-review document.
 
 ## Why This Matters
 
