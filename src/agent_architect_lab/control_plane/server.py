@@ -11,117 +11,21 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
-from agent_architect_lab.harness.incidents import (
-    get_incident_review_board,
-    list_incidents,
-    open_incident,
-    transition_incident,
-)
+from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
+from agent_architect_lab.control_plane.reporting import build_governance_summary_payload
+from agent_architect_lab.harness.incidents import get_incident_review_board, open_incident, transition_incident
 from agent_architect_lab.harness.ledger import (
+    deploy_release,
+    get_release_record,
     get_approval_review_board,
-    get_override_review_board,
     get_release_risk_board,
-    list_active_overrides,
+    grant_release_override,
     list_releases,
+    revoke_release_override,
+    rollback_release,
+    transition_release,
 )
 from agent_architect_lab.models import utc_now_iso
-
-
-def build_governance_summary_payload(
-    settings: Settings,
-    *,
-    environments: list[str] | None = None,
-    release_limit: int = 20,
-    incident_limit: int = 20,
-    override_limit: int = 50,
-) -> dict[str, Any]:
-    selected_environments = environments or settings.environment_names
-    release_risk_board = get_release_risk_board(
-        environments=selected_environments,
-        ledger_path=settings.release_ledger_path,
-        production_soak_minutes=settings.production_soak_minutes,
-        required_approver_roles=settings.production_required_approver_roles,
-        environment_policies=settings.environment_policies,
-        environment_freeze_windows=settings.environment_freeze_windows,
-        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
-        release_stale_minutes=settings.release_stale_minutes,
-        limit=release_limit,
-    ).to_dict()
-    approval_review_board = get_approval_review_board(
-        environments=selected_environments,
-        ledger_path=settings.release_ledger_path,
-        production_soak_minutes=settings.production_soak_minutes,
-        required_approver_roles=settings.production_required_approver_roles,
-        environment_policies=settings.environment_policies,
-        environment_freeze_windows=settings.environment_freeze_windows,
-        approval_stale_minutes=settings.approval_stale_minutes,
-        limit=release_limit,
-    ).to_dict()
-    override_review_board = get_override_review_board(
-        ledger_path=settings.release_ledger_path,
-        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
-        limit=override_limit,
-    ).to_dict()
-    active_overrides = [
-        row.to_dict()
-        for row in list_active_overrides(
-            ledger_path=settings.release_ledger_path,
-            release_name=None,
-            environment=None,
-            limit=override_limit,
-        )
-    ]
-    incident_review_board = get_incident_review_board(
-        ledger_path=settings.incident_ledger_path,
-        stale_minutes=settings.incident_stale_minutes,
-        status=None,
-        limit=incident_limit,
-    ).to_dict()
-    active_incidents = [
-        row.to_dict()
-        for row in list_incidents(
-            ledger_path=settings.incident_ledger_path,
-            status=None,
-            severity=None,
-            limit=incident_limit,
-        )
-        if row.status not in {"resolved", "closed"}
-    ]
-    releases = [row.to_dict() for row in list_releases(ledger_path=settings.release_ledger_path)]
-    return {
-        "generated_at": utc_now_iso(),
-        "environments": selected_environments,
-        "release_risk_board": release_risk_board,
-        "approval_review_board": approval_review_board,
-        "incident_review_board": incident_review_board,
-        "override_review_board": override_review_board,
-        "active_incidents": active_incidents,
-        "active_overrides": active_overrides,
-        "releases": releases,
-        "metrics": {
-            "recorded_release_count": len(releases),
-            "high_risk_release_count": len(
-                [row for row in release_risk_board.get("rows", []) if row.get("risk_level") == "high"]
-            ),
-            "stale_release_count": len([row for row in release_risk_board.get("rows", []) if row.get("is_stale")]),
-            "approval_backlog_count": len(approval_review_board.get("rows", [])),
-            "stale_approval_count": len(
-                [row for row in approval_review_board.get("rows", []) if row.get("is_stale")]
-            ),
-            "active_incident_count": len(active_incidents),
-            "critical_incident_count": len(
-                [row for row in active_incidents if row.get("severity") == "critical"]
-            ),
-            "active_override_count": len(active_overrides),
-            "urgent_override_count": len(
-                [
-                    row
-                    for row in override_review_board.get("rows", [])
-                    if row.get("status") in {"expired", "expiring_soon"}
-                ]
-            ),
-        },
-    }
 
 
 @dataclass(slots=True)
@@ -246,6 +150,8 @@ class ControlPlaneAuth:
 class ControlPlaneApp:
     settings: Settings
     auth: ControlPlaneAuth
+    job_store: ControlPlaneJobStore
+    job_worker: ControlPlaneJobWorker
 
     def handle_request(
         self,
@@ -254,32 +160,38 @@ class ControlPlaneApp:
         headers: Mapping[str, str],
         body: bytes,
     ) -> ControlPlaneResponse:
+        request_id = f"req-{uuid4().hex[:12]}"
         parsed = urlparse(raw_path)
         path = _normalize_path(parsed.path)
         query = parse_qs(parsed.query, keep_blank_values=False)
+        respond = lambda response: self._attach_response_envelope(response, request_id=request_id)
 
         try:
             if method == "GET" and path == "/health":
-                return ControlPlaneResponse(
+                return respond(ControlPlaneResponse(
                     200,
                     {
                         "status": "ok",
                         "service": "agent-architect-lab-control-plane",
                         "generated_at": utc_now_iso(),
+                        "worker": {
+                            "alive": self.job_worker.is_alive(),
+                            "poll_interval_s": self.job_worker.poll_interval_s,
+                        },
                         "auth": {
                             "read_token_configured": bool(self.auth.read_token),
                             "mutation_token_configured": bool(self.auth.mutation_token),
                         },
                     },
-                )
+                ))
             if method == "GET" and path == "/release-risk-board":
-                authorization, auth_error = self._authorize_route(
+                _authorization, auth_error = self._authorize_route(
                     scope="read",
                     route_policy_key="read_governance",
                     headers=headers,
                 )
                 if auth_error is not None:
-                    return auth_error
+                    return respond(auth_error)
                 environments = _query_environments(query, self.settings)
                 limit = _query_int(query, "limit", default=20, minimum=1)
                 payload = get_release_risk_board(
@@ -293,15 +205,15 @@ class ControlPlaneApp:
                     release_stale_minutes=self.settings.release_stale_minutes,
                     limit=limit,
                 ).to_dict()
-                return ControlPlaneResponse(200, payload)
+                return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/approval-review-board":
-                authorization, auth_error = self._authorize_route(
+                _authorization, auth_error = self._authorize_route(
                     scope="read",
                     route_policy_key="read_governance",
                     headers=headers,
                 )
                 if auth_error is not None:
-                    return auth_error
+                    return respond(auth_error)
                 environments = _query_environments(query, self.settings)
                 limit = _query_int(query, "limit", default=20, minimum=1)
                 payload = get_approval_review_board(
@@ -314,15 +226,15 @@ class ControlPlaneApp:
                     approval_stale_minutes=self.settings.approval_stale_minutes,
                     limit=limit,
                 ).to_dict()
-                return ControlPlaneResponse(200, payload)
+                return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/incident-review-board":
-                authorization, auth_error = self._authorize_route(
+                _authorization, auth_error = self._authorize_route(
                     scope="read",
                     route_policy_key="read_governance",
                     headers=headers,
                 )
                 if auth_error is not None:
-                    return auth_error
+                    return respond(auth_error)
                 status = _query_optional_string(
                     query,
                     "status",
@@ -335,15 +247,15 @@ class ControlPlaneApp:
                     status=status,
                     limit=limit,
                 ).to_dict()
-                return ControlPlaneResponse(200, payload)
+                return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/governance-summary":
-                authorization, auth_error = self._authorize_route(
+                _authorization, auth_error = self._authorize_route(
                     scope="read",
                     route_policy_key="read_governance",
                     headers=headers,
                 )
                 if auth_error is not None:
-                    return auth_error
+                    return respond(auth_error)
                 payload = build_governance_summary_payload(
                     self.settings,
                     environments=_query_environments(query, self.settings),
@@ -351,7 +263,332 @@ class ControlPlaneApp:
                     incident_limit=_query_int(query, "incident_limit", default=20, minimum=1),
                     override_limit=_query_int(query, "override_limit", default=50, minimum=1),
                 )
-                return ControlPlaneResponse(200, payload)
+                return respond(ControlPlaneResponse(200, payload))
+            if method == "GET" and path == "/releases":
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_governance",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                limit = _query_int(query, "limit", default=50, minimum=1)
+                payload = {"rows": [row.to_dict() for row in list_releases(ledger_path=self.settings.release_ledger_path)[:limit]]}
+                return respond(ControlPlaneResponse(200, payload))
+            release_match = re.fullmatch(r"/releases/([^/]+)", path)
+            if method == "GET" and release_match is not None:
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_governance",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = get_release_record(release_match.group(1), ledger_path=self.settings.release_ledger_path).to_dict()
+                return respond(ControlPlaneResponse(200, payload))
+            if method == "GET" and path == "/jobs":
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_jobs",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                status = _query_optional_string(
+                    query,
+                    "status",
+                    allowed={"queued", "running", "succeeded", "failed"},
+                )
+                limit = _query_int(query, "limit", default=50, minimum=1)
+                jobs = [job.to_dict() for job in self.job_store.list_jobs(status=status, limit=limit)]
+                return respond(ControlPlaneResponse(200, {"rows": jobs, "total": len(jobs)}))
+            job_match = re.fullmatch(r"/jobs/([^/]+)", path)
+            if method == "GET" and job_match is not None:
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_jobs",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                job = self.job_store.get_job(job_match.group(1))
+                return respond(ControlPlaneResponse(200, job.to_dict()))
+            if method == "POST" and path == "/jobs/export-governance-summary":
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="create_export_job",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="export_governance_summary",
+                            payload={
+                                "environments": _optional_string_list(payload, "environments"),
+                                "release_limit": _optional_int(payload, "release_limit", default=20),
+                                "incident_limit": _optional_int(payload, "incident_limit", default=20),
+                                "override_limit": _optional_int(payload, "override_limit", default=50),
+                                "output": _optional_string(payload, "output") or "",
+                                "title": _optional_string(payload, "title") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/record-operator-handoff":
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="create_export_job",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="record_operator_handoff",
+                            payload={
+                                "environments": _optional_string_list(payload, "environments"),
+                                "release_limit": _optional_int(payload, "release_limit", default=20),
+                                "override_limit": _optional_int(payload, "override_limit", default=50),
+                                "label": _optional_string(payload, "label") or "",
+                                "output_path": _optional_string(payload, "output_path") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/export-operator-handoff-report":
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="create_export_job",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="export_operator_handoff_report",
+                            payload={
+                                "snapshot": _optional_string(payload, "snapshot") or "",
+                                "latest": _optional_bool(payload, "latest", default=False),
+                                "output": _optional_string(payload, "output") or "",
+                                "title": _optional_string(payload, "title") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            release_approve_match = re.fullmatch(r"/releases/([^/]+)/approve", path)
+            if method == "POST" and release_approve_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="approve_release",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: transition_release(
+                        release_approve_match.group(1),
+                        action="approve",
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.release_ledger_path,
+                        role=_optional_string(payload, "role") or authorization.role or authorization.actor or "",
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            release_reject_match = re.fullmatch(r"/releases/([^/]+)/reject", path)
+            if method == "POST" and release_reject_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="reject_release",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: transition_release(
+                        release_reject_match.group(1),
+                        action="reject",
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.release_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            release_promote_match = re.fullmatch(r"/releases/([^/]+)/promote", path)
+            if method == "POST" and release_promote_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="promote_release",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: transition_release(
+                        release_promote_match.group(1),
+                        action="promote",
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.release_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            release_deploy_match = re.fullmatch(r"/releases/([^/]+)/deploy", path)
+            if method == "POST" and release_deploy_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="deploy_release",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: deploy_release(
+                        release_deploy_match.group(1),
+                        environment=_required_string(payload, "environment"),
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.release_ledger_path,
+                        production_soak_minutes=self.settings.production_soak_minutes,
+                        required_approver_roles=self.settings.production_required_approver_roles,
+                        environment_policies=self.settings.environment_policies,
+                        environment_freeze_windows=self.settings.environment_freeze_windows,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            release_rollback_match = re.fullmatch(r"/releases/([^/]+)/rollback", path)
+            if method == "POST" and release_rollback_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="deploy_release",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: rollback_release(
+                        release_rollback_match.group(1),
+                        environment=_required_string(payload, "environment"),
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.release_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            release_override_grant_match = re.fullmatch(r"/releases/([^/]+)/overrides/grant", path)
+            if method == "POST" and release_override_grant_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="manage_release_override",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: grant_release_override(
+                        release_override_grant_match.group(1),
+                        environment=_required_string(payload, "environment"),
+                        blocker=_required_string(payload, "blocker"),
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        expires_at=_optional_string(payload, "expires_at"),
+                        ledger_path=self.settings.release_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            release_override_revoke_match = re.fullmatch(r"/releases/([^/]+)/overrides/revoke", path)
+            if method == "POST" and release_override_revoke_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="manage_release_override",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: revoke_release_override(
+                        release_override_revoke_match.group(1),
+                        environment=_required_string(payload, "environment"),
+                        blocker=_required_string(payload, "blocker"),
+                        actor=authorization.actor or _required_string(payload, "actor"),
+                        note=_optional_string(payload, "note") or "",
+                        ledger_path=self.settings.release_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
             if method == "POST" and path == "/incidents/open":
                 authorization, auth_error = self._authorize_route(
                     scope="write",
@@ -359,8 +596,9 @@ class ControlPlaneApp:
                     headers=headers,
                 )
                 if auth_error is not None:
-                    return auth_error
-                return self._execute_mutation(
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
                     authorization=authorization,
                     method=method,
                     path=path,
@@ -377,7 +615,7 @@ class ControlPlaneApp:
                         ledger_path=self.settings.incident_ledger_path,
                     ).to_dict(),
                     success_status_code=201,
-                )
+                ))
             transition_match = re.fullmatch(r"/incidents/([^/]+)/transition", path)
             if method == "POST" and transition_match is not None:
                 authorization, auth_error = self._authorize_route(
@@ -386,8 +624,9 @@ class ControlPlaneApp:
                     headers=headers,
                 )
                 if auth_error is not None:
-                    return auth_error
-                return self._execute_mutation(
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
                     authorization=authorization,
                     method=method,
                     path=path,
@@ -403,14 +642,14 @@ class ControlPlaneApp:
                         ledger_path=self.settings.incident_ledger_path,
                     ).to_dict(),
                     success_status_code=200,
-                )
-            return _error_response(404, "not_found", f"Route '{path}' is not defined.")
+                ))
+            return respond(_error_response(404, "not_found", f"Route '{path}' is not defined."))
         except json.JSONDecodeError:
-            return _error_response(400, "invalid_json", "Request body must be valid JSON.")
+            return respond(_error_response(400, "invalid_json", "Request body must be valid JSON."))
         except KeyError as exc:
-            return _error_response(404, "not_found", str(exc))
+            return respond(_error_response(404, "not_found", str(exc)))
         except ValueError as exc:
-            return _error_response(400, "invalid_request", str(exc))
+            return respond(_error_response(400, "invalid_request", str(exc)))
 
     def _authorize_route(
         self,
@@ -445,6 +684,7 @@ class ControlPlaneApp:
     def _execute_mutation(
         self,
         *,
+        request_id: str,
         authorization: AuthorizationContext | None,
         method: str,
         path: str,
@@ -465,6 +705,7 @@ class ControlPlaneApp:
                     "Idempotency-Key has already been used for a different request payload.",
                 )
                 self._append_mutation_audit(
+                    request_id=request_id,
                     method=method,
                     path=path,
                     headers=headers,
@@ -476,7 +717,7 @@ class ControlPlaneApp:
                 authorization=authorization,
                 replayed=False,
                 conflict=True,
-            )
+                )
                 return response
             response = self._build_mutation_response(
                 status_code=existing.status_code,
@@ -487,6 +728,7 @@ class ControlPlaneApp:
                 committed_at=existing.committed_at,
             )
             self._append_mutation_audit(
+                request_id=request_id,
                 method=method,
                 path=path,
                 headers=headers,
@@ -527,6 +769,7 @@ class ControlPlaneApp:
         )
         registry.save(self.settings.control_plane_idempotency_path)
         self._append_mutation_audit(
+            request_id=request_id,
             method=method,
             path=path,
             headers=headers,
@@ -540,6 +783,35 @@ class ControlPlaneApp:
             conflict=False,
         )
         return response
+
+    def _enqueue_job(
+        self,
+        *,
+        job_type: str,
+        payload: dict[str, Any],
+        authorization: AuthorizationContext | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        job = self.job_store.create_job(
+            job_type=job_type,
+            payload=payload,
+            requested_by_actor=authorization.actor if authorization is not None else None,
+            requested_by_role=authorization.role if authorization is not None else None,
+            request_id=request_id,
+            operation_id=None,
+        )
+        return job.to_dict()
+
+    def _attach_response_envelope(self, response: ControlPlaneResponse, *, request_id: str) -> ControlPlaneResponse:
+        payload = dict(response.payload)
+        payload["_meta"] = {
+            "request_id": request_id,
+            "generated_at": utc_now_iso(),
+            "service": "agent-architect-lab-control-plane",
+        }
+        headers = dict(response.headers)
+        headers["X-Request-Id"] = request_id
+        return ControlPlaneResponse(status_code=response.status_code, payload=payload, headers=headers)
 
     def _build_mutation_response(
         self,
@@ -570,6 +842,7 @@ class ControlPlaneApp:
     def _append_mutation_audit(
         self,
         *,
+        request_id: str,
         method: str,
         path: str,
         headers: Mapping[str, str],
@@ -585,6 +858,7 @@ class ControlPlaneApp:
         self.settings.control_plane_request_log_path.parent.mkdir(parents=True, exist_ok=True)
         audit_entry = {
             "audit_event_id": f"audit-{uuid4().hex[:12]}",
+            "request_id": request_id,
             "occurred_at": utc_now_iso(),
             "operation_id": operation_id,
             "method": method,
@@ -608,6 +882,14 @@ class ControlPlaneApp:
 class ControlPlaneHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
+    def __init__(self, server_address, RequestHandlerClass, *, job_worker: ControlPlaneJobWorker):
+        super().__init__(server_address, RequestHandlerClass)
+        self.job_worker = job_worker
+
+    def server_close(self) -> None:
+        self.job_worker.stop()
+        super().server_close()
+
 
 def create_control_plane_server(
     *,
@@ -616,17 +898,23 @@ def create_control_plane_server(
     port: int | None = None,
 ) -> tuple[ControlPlaneHTTPServer, ControlPlaneApp]:
     resolved_settings = settings or load_settings()
+    job_store = ControlPlaneJobStore(resolved_settings.control_plane_job_registry_path)
+    job_worker = ControlPlaneJobWorker(settings=resolved_settings, store=job_store)
     app = ControlPlaneApp(
         settings=resolved_settings,
         auth=ControlPlaneAuth(
             read_token=resolved_settings.control_plane_read_token,
             mutation_token=resolved_settings.control_plane_mutation_token,
         ),
+        job_store=job_store,
+        job_worker=job_worker,
     )
     server = ControlPlaneHTTPServer(
         (host or resolved_settings.control_plane_host, port if port is not None else resolved_settings.control_plane_port),
         _build_handler(app),
+        job_worker=job_worker,
     )
+    job_worker.start()
     return server, app
 
 
@@ -767,6 +1055,43 @@ def _optional_string(payload: Mapping[str, Any], key: str) -> str | None:
         raise ValueError(f"Field '{key}' must be a string.")
     stripped = value.strip()
     return stripped or None
+
+
+def _optional_int(payload: Mapping[str, Any], key: str, *, default: int) -> int:
+    value = payload.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"Field '{key}' must be an integer.")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Field '{key}' must be an integer.") from exc
+
+
+def _optional_bool(payload: Mapping[str, Any], key: str, *, default: bool) -> bool:
+    value = payload.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"Field '{key}' must be a boolean.")
+
+
+def _optional_string_list(payload: Mapping[str, Any], key: str) -> list[str]:
+    value = payload.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Field '{key}' must be a list of strings.")
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"Field '{key}' must be a list of strings.")
+        stripped = item.strip()
+        if stripped:
+            items.append(stripped)
+    return items
 
 
 def _normalize_path(path: str) -> str:

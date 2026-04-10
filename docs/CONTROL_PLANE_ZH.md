@@ -31,10 +31,19 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 - 成功的写请求会按 idempotency key 缓存首个响应，后续重试直接重放
 - mutation 审计日志会追加写入 `artifacts/control-plane/mutation-requests.jsonl`
 - idempotency 状态会持久化到 `artifacts/control-plane/idempotency-registry.json`
+- 长时间运行的导出任务会持久化到 `artifacts/control-plane/job-registry.json`
+- 每个 API 响应现在都会带 `_meta.request_id` 方便串联日志和审计
 
 默认内置的 role policy key：
 
 - `read_governance`
+- `read_jobs`
+- `create_export_job`
+- `approve_release`
+- `reject_release`
+- `promote_release`
+- `deploy_release`
+- `manage_release_override`
 - `open_incident`
 - `transition_incident`
 
@@ -53,15 +62,29 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 ### 读接口
 
 - `GET /health`
+- `GET /releases?limit=50`
+- `GET /releases/{release_name}`
 - `GET /release-risk-board?environment=staging&environment=production&limit=20`
 - `GET /approval-review-board?environment=staging&environment=production&limit=20`
 - `GET /incident-review-board?status=open&limit=20`
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
+- `GET /jobs?status=queued&limit=50`
+- `GET /jobs/{job_id}`
 
 ### 写接口
 
+- `POST /releases/{release_name}/approve`
+- `POST /releases/{release_name}/reject`
+- `POST /releases/{release_name}/promote`
+- `POST /releases/{release_name}/deploy`
+- `POST /releases/{release_name}/rollback`
+- `POST /releases/{release_name}/overrides/grant`
+- `POST /releases/{release_name}/overrides/revoke`
 - `POST /incidents/open`
 - `POST /incidents/{incident_id}/transition`
+- `POST /jobs/export-governance-summary`
+- `POST /jobs/record-operator-handoff`
+- `POST /jobs/export-operator-handoff-report`
 
 ## 示例请求
 
@@ -97,6 +120,23 @@ curl \
   }'
 ```
 
+审批 release：
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: qa-owner-1" \
+  -H "X-Control-Plane-Role: qa-owner" \
+  -H "Idempotency-Key: approve-release-20260410-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/releases/2026-04-10-main/approve \
+  -d '{
+    "role": "qa-owner",
+    "note": "gate review complete"
+  }'
+```
+
 推进 incident 状态：
 
 ```bash
@@ -116,14 +156,45 @@ curl \
   }'
 ```
 
+创建治理摘要导出任务：
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-governance-summary-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-governance-summary \
+  -d '{
+    "title": "Weekly Governance Summary",
+    "output": "/tmp/governance-summary.md",
+    "release_limit": 20,
+    "incident_limit": 20,
+    "override_limit": 50
+  }'
+```
+
+查询任务状态：
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/jobs/job-abc123def456
+```
+
 ## 当前边界
 
 这层 control plane 是有意做窄的：
 
 - 读模型优先服务治理、审阅和值班流程
 - 当前写接口只覆盖 incident 创建与状态推进
+- 长时间运行的导出已经走持久化 worker，但还不是分布式队列
 - 存储仍然是本地 artifact JSON，而不是外部数据库
 - 权限现在已经是 token + route-level role policy，但还不是完整统一的 RBAC / policy engine
-- 现在已经有幂等和审计，但还没有后台队列、分布式锁和更强的一致性协调
+- 现在已经有幂等、审计和 job persistence，但还没有分布式队列、分布式锁和更强的一致性协调
 
 这意味着它已经足够像一套内部生产治理服务，可以支撑本地演练和内部工具接入，同时仍然保持依赖轻、容易测试。

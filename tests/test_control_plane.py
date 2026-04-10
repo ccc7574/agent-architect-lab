@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import threading
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from agent_architect_lab.cli import (
     cmd_run_release_shadow,
 )
 from agent_architect_lab.config import load_settings
+from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
 from agent_architect_lab.control_plane.server import ControlPlaneApp, ControlPlaneAuth, create_control_plane_server
 
 
@@ -46,6 +48,12 @@ def _seed_release_state() -> None:
         )
 
 
+def _seed_release_candidate() -> None:
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-b", "", True, "", "release-b")
+
+
 def _auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
@@ -73,16 +81,24 @@ def _request_headers(
     return headers
 
 
-def test_control_plane_app_requires_read_token_for_governance_routes(monkeypatch, tmp_path: Path) -> None:
-    _configure_env(monkeypatch, tmp_path)
-    settings = load_settings()
-    app = ControlPlaneApp(
+def _build_app(settings) -> ControlPlaneApp:
+    job_store = ControlPlaneJobStore(settings.control_plane_job_registry_path)
+    job_worker = ControlPlaneJobWorker(settings=settings, store=job_store)
+    return ControlPlaneApp(
         settings=settings,
         auth=ControlPlaneAuth(
             read_token=settings.control_plane_read_token,
             mutation_token=settings.control_plane_mutation_token,
         ),
+        job_store=job_store,
+        job_worker=job_worker,
     )
+
+
+def test_control_plane_app_requires_read_token_for_governance_routes(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    app = _build_app(settings)
 
     unauthorized = app.handle_request(
         "GET",
@@ -101,13 +117,7 @@ def test_control_plane_app_requires_read_token_for_governance_routes(monkeypatch
 def test_control_plane_app_disables_mutation_routes_without_mutation_token(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path, mutation_token=None)
     settings = load_settings()
-    app = ControlPlaneApp(
-        settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-    )
+    app = _build_app(settings)
 
     response = app.handle_request(
         "POST",
@@ -134,13 +144,7 @@ def test_control_plane_app_disables_mutation_routes_without_mutation_token(monke
 def test_control_plane_app_requires_identity_for_governance_routes(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
-    app = ControlPlaneApp(
-        settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-    )
+    app = _build_app(settings)
 
     response = app.handle_request(
         "GET",
@@ -156,13 +160,7 @@ def test_control_plane_app_requires_identity_for_governance_routes(monkeypatch, 
 def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
-    app = ControlPlaneApp(
-        settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-    )
+    app = _build_app(settings)
 
     response = app.handle_request(
         "POST",
@@ -189,13 +187,7 @@ def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -
 def test_control_plane_app_requires_idempotency_key_for_mutations(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
-    app = ControlPlaneApp(
-        settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-    )
+    app = _build_app(settings)
 
     response = app.handle_request(
         "POST",
@@ -224,13 +216,7 @@ def test_control_plane_app_requires_idempotency_key_for_mutations(monkeypatch, t
 def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
-    app = ControlPlaneApp(
-        settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-    )
+    app = _build_app(settings)
 
     opened = app.handle_request(
         "POST",
@@ -314,13 +300,7 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
 def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
-    app = ControlPlaneApp(
-        settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-    )
+    app = _build_app(settings)
 
     first = app.handle_request(
         "POST",
@@ -360,6 +340,42 @@ def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tm
     assert first.status_code == 201
     assert conflicting.status_code == 409
     assert conflicting.payload["error"]["code"] == "idempotency_conflict"
+
+
+def test_control_plane_app_approves_release_via_control_plane(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_candidate()
+    settings = load_settings()
+    app = _build_app(settings)
+
+    approved = app.handle_request(
+        "POST",
+        "/releases/release-b/approve",
+        _request_headers(
+            "writer-token",
+            actor="qa-owner-1",
+            role="qa-owner",
+            idempotency_key="approve-release-b-1",
+        ),
+        json.dumps({"note": "qa sign-off", "role": "qa-owner"}).encode("utf-8"),
+    )
+    fetched = app.handle_request(
+        "GET",
+        "/releases/release-b",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
+
+    assert approved.status_code == 200
+    assert approved.payload["approvals"][0]["role"] == "qa-owner"
+    assert approved.payload["_control_plane"]["replayed"] is False
+    assert fetched.status_code == 200
+    assert fetched.payload["release_name"] == "release-b"
+    assert fetched.payload["approvals"][0]["actor"] == "qa-owner-1"
 
 
 def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, tmp_path: Path) -> None:
@@ -423,6 +439,72 @@ def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, t
         assert incident_response.status == 201
         assert incident_payload["status"] == "open"
         assert incident_payload["_control_plane"]["replayed"] is False
+        assert incident_payload["_meta"]["request_id"].startswith("req-")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-governance-summary",
+            body=json.dumps(
+                {
+                    "title": "Async Governance Summary",
+                    "output": str(tmp_path / "async-governance.md"),
+                    "release_limit": 5,
+                    "incident_limit": 5,
+                    "override_limit": 5,
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-governance-summary-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] in {"succeeded", "failed"}:
+                break
+        connection.close()
+
+        assert create_response.status == 202
+        assert create_payload["status"] == "queued"
+        assert status_payload["status"] == "succeeded"
+        assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        assert "Async Governance Summary" in Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
     finally:
         server.shutdown()
         server.server_close()

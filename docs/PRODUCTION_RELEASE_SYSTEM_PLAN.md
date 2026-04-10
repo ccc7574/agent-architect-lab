@@ -10,14 +10,15 @@ This document reviews the current `agent-architect-lab` repository as if it were
 - A lightweight HTTP control plane now exposes governance views and incident mutations behind bearer-token boundaries.
 - Mutation routes now enforce idempotency keys and write audit records for replay and review.
 - Protected routes now also enforce route-level actor and role policies.
+- Long-running exports now run through a persisted in-process job registry and worker.
 - Shift handoff artifacts can be persisted, reloaded, and exported as Markdown reports.
 - Incident-to-eval suggestion flow exists and incidents can now be recorded, transitioned, and reviewed in a dedicated ledger.
 - The repository has broad automated coverage for the governance flows and command-line workflows.
 
 ## Findings
 
-1. A service boundary now exists, and the mutation layer now has audit, idempotency, and route-level role policy semantics, but it is still intentionally narrow.
-   The repo now has an internal HTTP surface plus token-gated read/write separation, request replay protection, mutation audit trails, and route-scoped actor/role checks, but it still lacks a centralized policy engine, queued work, and background workers.
+1. A service boundary now exists, and the mutation layer now has audit, idempotency, route-level role policy, and persisted export job semantics, but it is still intentionally narrow.
+   The repo now has an internal HTTP surface plus token-gated read/write separation, request replay protection, mutation audit trails, route-scoped actor/role checks, and a persisted in-process export worker, but it still lacks a centralized policy engine, distributed queueing, and background workers for all state transitions.
 
 2. Incident management is now present, but not yet fully wired into eval automation.
    Incidents can store follow-up eval paths, but the system does not yet generate a complete “incident packet” that bundles report, release, handoff, and follow-up artifacts together.

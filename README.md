@@ -194,6 +194,8 @@ Protected control-plane routes also require `X-Control-Plane-Actor` and `X-Contr
 Role policies come from `AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES`, which defaults to separate permissions for governance reads, incident opening, and incident transitions.
 State-changing routes also require an `Idempotency-Key` header. The first successful mutation response is stored and replayed for safe retries.
 Control-plane mutation audits are written under `artifacts/control-plane/mutation-requests.jsonl`, and idempotency state is stored under `artifacts/control-plane/idempotency-registry.json`.
+Long-running exports now run through a persisted job registry at `artifacts/control-plane/job-registry.json`.
+The embedded worker polls that registry on `AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_POLL_INTERVAL_S`, which defaults to `0.25`.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.

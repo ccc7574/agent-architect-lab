@@ -31,10 +31,19 @@ The server is stdlib-only and keeps artifact storage exactly where the CLI keeps
 - Successful mutation responses are cached by idempotency key and replayed on retries
 - Mutation request audits are appended to `artifacts/control-plane/mutation-requests.jsonl`
 - Idempotency registry state is persisted in `artifacts/control-plane/idempotency-registry.json`
+- Long-running exports are persisted in `artifacts/control-plane/job-registry.json`
+- Every API response now includes `_meta.request_id` for correlation
 
 Default role policy keys:
 
 - `read_governance`
+- `read_jobs`
+- `create_export_job`
+- `approve_release`
+- `reject_release`
+- `promote_release`
+- `deploy_release`
+- `manage_release_override`
 - `open_incident`
 - `transition_incident`
 
@@ -53,15 +62,29 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 ### Read Routes
 
 - `GET /health`
+- `GET /releases?limit=50`
+- `GET /releases/{release_name}`
 - `GET /release-risk-board?environment=staging&environment=production&limit=20`
 - `GET /approval-review-board?environment=staging&environment=production&limit=20`
 - `GET /incident-review-board?status=open&limit=20`
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
+- `GET /jobs?status=queued&limit=50`
+- `GET /jobs/{job_id}`
 
 ### Mutation Routes
 
+- `POST /releases/{release_name}/approve`
+- `POST /releases/{release_name}/reject`
+- `POST /releases/{release_name}/promote`
+- `POST /releases/{release_name}/deploy`
+- `POST /releases/{release_name}/rollback`
+- `POST /releases/{release_name}/overrides/grant`
+- `POST /releases/{release_name}/overrides/revoke`
 - `POST /incidents/open`
 - `POST /incidents/{incident_id}/transition`
+- `POST /jobs/export-governance-summary`
+- `POST /jobs/record-operator-handoff`
+- `POST /jobs/export-operator-handoff-report`
 
 ## Example Requests
 
@@ -97,6 +120,23 @@ curl \
   }'
 ```
 
+Approve a release:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: qa-owner-1" \
+  -H "X-Control-Plane-Role: qa-owner" \
+  -H "Idempotency-Key: approve-release-20260410-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/releases/2026-04-10-main/approve \
+  -d '{
+    "role": "qa-owner",
+    "note": "gate review complete"
+  }'
+```
+
 Transition an incident:
 
 ```bash
@@ -116,14 +156,45 @@ curl \
   }'
 ```
 
+Queue a governance summary export job:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-governance-summary-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-governance-summary \
+  -d '{
+    "title": "Weekly Governance Summary",
+    "output": "/tmp/governance-summary.md",
+    "release_limit": 20,
+    "incident_limit": 20,
+    "override_limit": 50
+  }'
+```
+
+Check job status:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/jobs/job-abc123def456
+```
+
 ## Current Boundary
 
 This control plane is intentionally narrow:
 
 - read models are optimized for governance and review flows
 - write models currently cover incident creation and incident transition
+- long-running exports already run through a persisted in-process worker, but not a distributed queue
 - storage is still local artifact-backed JSON, not an external database
 - access control is token plus route-level role policy, not yet a full centralized RBAC or policy engine
-- idempotency and audit exist, but there is no background queue or distributed lock coordination yet
+- idempotency, audit, and job persistence exist, but there is no distributed queue or lock coordination yet
 
 That makes it suitable for local production-style drills and internal tooling, while keeping the repo dependency-light and testable.

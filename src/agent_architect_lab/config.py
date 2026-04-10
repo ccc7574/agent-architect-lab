@@ -15,6 +15,7 @@ class Settings:
     control_plane_dir: Path
     control_plane_request_log_path: Path
     control_plane_idempotency_path: Path
+    control_plane_job_registry_path: Path
     traces_dir: Path
     reports_dir: Path
     checkpoints_dir: Path
@@ -32,6 +33,7 @@ class Settings:
     control_plane_read_token: str | None
     control_plane_mutation_token: str | None
     control_plane_role_policies: dict[str, list[str]]
+    control_plane_job_poll_interval_s: float
     planner_provider: str
     planner_model: str
     planner_api_base: str | None
@@ -70,6 +72,7 @@ def load_settings() -> Settings:
     control_plane_dir = artifacts_dir / "control-plane"
     control_plane_request_log_path = control_plane_dir / "mutation-requests.jsonl"
     control_plane_idempotency_path = control_plane_dir / "idempotency-registry.json"
+    control_plane_job_registry_path = control_plane_dir / "job-registry.json"
     traces_dir = artifacts_dir / "traces"
     reports_dir = artifacts_dir / "reports"
     checkpoints_dir = artifacts_dir / "checkpoints"
@@ -98,6 +101,44 @@ def load_settings() -> Settings:
                         "incident-commander",
                         "qa-owner",
                     ],
+                    "read_jobs": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                        "qa-owner",
+                    ],
+                    "create_export_job": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                    ],
+                    "approve_release": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "qa-owner",
+                    ],
+                    "reject_release": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "qa-owner",
+                    ],
+                    "promote_release": [
+                        "control-plane-admin",
+                        "release-manager",
+                    ],
+                    "deploy_release": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                    ],
+                    "manage_release_override": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                    ],
                     "open_incident": [
                         "control-plane-admin",
                         "release-manager",
@@ -118,6 +159,9 @@ def load_settings() -> Settings:
         str(route_key): _normalize_role_list(roles)
         for route_key, roles in raw_control_plane_role_policies.items()
     }
+    control_plane_job_poll_interval_s = float(
+        os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_POLL_INTERVAL_S", "0.25")
+    )
     planner_provider = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_PROVIDER", "heuristic").strip().lower()
     planner_model = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_MODEL", "gpt-4.1-mini")
     planner_api_base = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_API_BASE")
@@ -219,6 +263,7 @@ def load_settings() -> Settings:
         control_plane_dir=control_plane_dir,
         control_plane_request_log_path=control_plane_request_log_path,
         control_plane_idempotency_path=control_plane_idempotency_path,
+        control_plane_job_registry_path=control_plane_job_registry_path,
         traces_dir=traces_dir,
         reports_dir=reports_dir,
         checkpoints_dir=checkpoints_dir,
@@ -236,6 +281,7 @@ def load_settings() -> Settings:
         control_plane_read_token=control_plane_read_token,
         control_plane_mutation_token=control_plane_mutation_token,
         control_plane_role_policies=control_plane_role_policies,
+        control_plane_job_poll_interval_s=control_plane_job_poll_interval_s,
         planner_provider=planner_provider,
         planner_model=planner_model,
         planner_api_base=planner_api_base,

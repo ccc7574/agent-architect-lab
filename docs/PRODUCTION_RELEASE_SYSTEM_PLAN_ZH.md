@@ -10,14 +10,15 @@
 - 现在已经有轻量 HTTP control plane，并且把 read / write 路由放在 bearer token 边界之后
 - mutation 路由现在也已经有 idempotency key 和请求审计能力
 - 受保护路由现在也已经支持 route-level actor / role policy
+- 长时间运行的导出任务现在已经走持久化 job registry + 内置 worker
 - 交接数据不仅能生成 JSON，还能留档、回看，并导出为 Markdown 报告
 - incident 到 eval backfill 的建议流已经存在，现在 incident 本身也有独立 ledger 和状态机
 - 与治理相关的 CLI 和核心路径已经有较完整的自动化测试覆盖
 
 ## 核心结论
 
-1. 现在已经有 service 边界，而且 mutation 已经具备幂等、审计和 route-level role policy 语义，但这层还比较窄。
-   仓库已经具备内部 HTTP surface、读写分离的 token 边界、请求重放保护、mutation 审计轨迹以及按路由校验 actor/role 的能力，但还缺统一 policy engine、队列化执行和后台 worker。
+1. 现在已经有 service 边界，而且 mutation 已经具备幂等、审计、route-level role policy 和持久化导出任务语义，但这层还比较窄。
+   仓库已经具备内部 HTTP surface、读写分离的 token 边界、请求重放保护、mutation 审计轨迹、按路由校验 actor/role 的能力，以及持久化的内置导出 worker，但还缺统一 policy engine、分布式队列和覆盖全部状态流转的后台 worker。
 
 2. incident 管理已经落地，但 incident closure loop 还不够完整。
    现在可以记录 incident、推进状态、挂 follow-up eval 路径，但还没有形成完整的 incident artifact bundle。
