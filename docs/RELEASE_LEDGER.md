@@ -249,6 +249,12 @@ Render the latest handoff snapshot as a Markdown report:
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
 ```
 
+Render a manager-facing governance summary:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
+```
+
 Grant a temporary override for a specific blocker:
 
 ```bash
@@ -290,6 +296,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --labe
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-policy --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
@@ -316,6 +323,7 @@ Incidents can only move to `closed` after they first reach `resolved`, and closu
 `record-operator-handoff` writes that payload to `artifacts/handoffs` so handoff state can be preserved between shifts.
 `list-operator-handoffs` provides a compact shift-history index, and `show-operator-handoff --latest` reloads the latest saved handoff without requiring operators to inspect the artifact directory manually.
 `export-operator-handoff-report` renders a saved handoff snapshot into Markdown so the same operator state can be shared as a readable shift-transfer or incident-review document.
+`export-governance-summary` compresses release risk, approval backlog, incident load, active overrides, and recent releases into one manager-facing Markdown summary.
 
 ## Why This Matters
 

@@ -18,6 +18,7 @@ from agent_architect_lab.cli import (
     cmd_incident_status,
     cmd_export_incident_report,
     cmd_export_incident_bundle,
+    cmd_export_governance_summary,
     cmd_grant_release_override,
     cmd_list_incidents,
     cmd_list_active_overrides,
@@ -240,6 +241,49 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
     assert manifest["release_record"]["release_name"] == "release-a"
     assert manifest["related_handoff_snapshot_path"] is not None
     assert manifest["related_handoff_report_path"] is not None
+
+
+def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES", "0")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_open_incident(
+            "critical",
+            "unsafe production answer",
+            "incident-commander",
+            "production",
+            "release-a",
+            "",
+            "customer escalation",
+        )
+        cmd_grant_release_override(
+            "release-a",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "emergency waiver",
+            "",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_export_governance_summary([], 10, 10, 10, "", "Weekly Governance Summary")
+    payload = json.loads(buffer.getvalue())
+    markdown = Path(payload["saved_to"]).read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert "# Weekly Governance Summary" in markdown
+    assert "## Summary Metrics" in markdown
+    assert "## Incident Queue" in markdown
+    assert "## Override Pressure" in markdown
+    assert "unsafe production answer" in markdown
+    assert payload["metrics"]["active_incident_count"] == 1
 
 
 def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, tmp_path: Path) -> None:

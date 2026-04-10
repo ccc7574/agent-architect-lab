@@ -204,6 +204,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
 ```
 
+导出一份面向主管/经理的治理摘要：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
+```
+
 查看当前环境策略：
 
 ```bash
@@ -475,6 +481,7 @@ incident 只有先到 `resolved`，并且挂上 `follow-up eval` 之后，才允
 `record-operator-handoff` 会把这份 payload 保存到 `artifacts/handoffs`，方便交接留档和事后审计。
 `list-operator-handoffs` 提供交接历史索引，`show-operator-handoff --latest` 可以直接读取最新留档，不需要人工翻 artifacts 目录。
 `export-operator-handoff-report` 会把留档过的交接快照渲染成 Markdown 报告，适合直接发给下一班值班、事故复盘或周报同步。
+`export-governance-summary` 会把 release risk、approval backlog、incident 负载、override 压力和最近 release 汇总成一份管理层可读的 Markdown 摘要。
 
 ## 推荐运维流程
 

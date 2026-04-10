@@ -73,6 +73,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli record-operator-handoff --labe
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit 10
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
@@ -178,6 +179,7 @@ Use `approval-review-board` plus `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to
 Use `open-incident`, `transition-incident`, `list-incidents`, and `incident-review-board` to run a basic incident command workflow with ownership, status, and follow-up eval linkage.
 Use `export-incident-report` to render one incident into a readable Markdown artifact for postmortems or stakeholder updates.
 Use `export-incident-bundle` to package the incident, linked release state, and related handoff artifacts into one export directory.
+Use `export-governance-summary` to generate a manager-facing Markdown summary across release risk, approval backlog, incident load, and override pressure.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.

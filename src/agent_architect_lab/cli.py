@@ -49,7 +49,7 @@ from agent_architect_lab.harness.rollout import build_rollout_review
 from agent_architect_lab.harness.runner import run_suite
 from agent_architect_lab.harness.shadow import run_shadow_suite
 from agent_architect_lab.mcp.server import serve
-from agent_architect_lab.models import Task
+from agent_architect_lab.models import Task, utc_now_iso
 from agent_architect_lab.skills.catalog import load_skills, select_skills
 
 
@@ -278,6 +278,14 @@ def build_parser() -> argparse.ArgumentParser:
     export_handoff_report_cmd.add_argument("--latest", action="store_true", help="Load the most recently generated handoff snapshot.")
     export_handoff_report_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to the snapshot path with a .md suffix.")
     export_handoff_report_cmd.add_argument("--title", default="", help="Optional report title override.")
+
+    export_governance_summary_cmd = subparsers.add_parser("export-governance-summary", help="Render a manager-facing governance summary across releases, approvals, incidents, and overrides.")
+    export_governance_summary_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
+    export_governance_summary_cmd.add_argument("--release-limit", type=int, default=20, help="Maximum number of releases to include in release and approval sections.")
+    export_governance_summary_cmd.add_argument("--incident-limit", type=int, default=20, help="Maximum number of incidents to include.")
+    export_governance_summary_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum number of overrides to include.")
+    export_governance_summary_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/reports/governance-summary.md.")
+    export_governance_summary_cmd.add_argument("--title", default="", help="Optional report title override.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -1300,6 +1308,257 @@ def cmd_export_operator_handoff_report(snapshot: str, latest: bool, output: str,
     return 0
 
 
+def _render_governance_summary_markdown(payload: dict, *, title: str) -> str:
+    release_rows = payload.get("release_risk_board", {}).get("rows", [])
+    approval_rows = payload.get("approval_review_board", {}).get("rows", [])
+    incident_rows = payload.get("incident_review_board", {}).get("rows", [])
+    override_rows = payload.get("override_review_board", {}).get("rows", [])
+    active_overrides = payload.get("active_overrides", [])
+    active_incidents = payload.get("active_incidents", [])
+    releases = payload.get("releases", [])
+    metrics = payload.get("metrics", {})
+    lines = [
+        f"# {title}",
+        "",
+        f"- Generated at: {_markdown_cell(payload.get('generated_at'))}",
+        f"- Environments: {_markdown_cell(payload.get('environments', []))}",
+        "",
+        "## Summary Metrics",
+        "",
+    ]
+    lines.extend(
+        _render_markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Recorded releases", metrics.get("recorded_release_count")],
+                ["High-risk releases", metrics.get("high_risk_release_count")],
+                ["Stale releases", metrics.get("stale_release_count")],
+                ["Approval backlog", metrics.get("approval_backlog_count")],
+                ["Stale approval queues", metrics.get("stale_approval_count")],
+                ["Active incidents", metrics.get("active_incident_count")],
+                ["Critical incidents", metrics.get("critical_incident_count")],
+                ["Active overrides", metrics.get("active_override_count")],
+                ["Expired or expiring overrides", metrics.get("urgent_override_count")],
+            ],
+        )
+    )
+    lines.extend(["", "## Top Release Risks", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Risk", "State", "Blocking Environments", "Next Action"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("risk_level"),
+                    row.get("release_state"),
+                    row.get("blocking_environments", []),
+                    row.get("next_action"),
+                ]
+                for row in release_rows[:10]
+            ],
+        )
+    )
+    lines.extend(["", "## Approval Backlog", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Status", "Risk", "Missing Roles", "Blocking Environments", "Action"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("status"),
+                    row.get("risk_level"),
+                    row.get("missing_roles", []),
+                    row.get("blocking_environments", []),
+                    row.get("recommended_action"),
+                ]
+                for row in approval_rows[:10]
+            ],
+        )
+    )
+    lines.extend(["", "## Incident Queue", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Incident", "Severity", "Status", "Owner", "Release", "Summary", "Action"],
+            [
+                [
+                    row.get("incident_id"),
+                    row.get("severity"),
+                    row.get("status"),
+                    row.get("owner"),
+                    row.get("release_name"),
+                    row.get("summary"),
+                    row.get("recommended_action"),
+                ]
+                for row in incident_rows[:10]
+            ],
+        )
+    )
+    lines.extend(["", "## Override Pressure", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Environment", "Blocker", "Status", "Risk", "Action"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("environment"),
+                    row.get("blocker"),
+                    row.get("status"),
+                    row.get("risk_level"),
+                    row.get("recommended_action"),
+                ]
+                for row in override_rows[:10]
+            ],
+        )
+    )
+    lines.extend(["", "## Active Incidents", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Incident", "Severity", "Status", "Owner", "Environment", "Release"],
+            [
+                [
+                    row.get("incident_id"),
+                    row.get("severity"),
+                    row.get("status"),
+                    row.get("owner"),
+                    row.get("environment"),
+                    row.get("release_name"),
+                ]
+                for row in active_incidents[:10]
+            ],
+        )
+    )
+    lines.extend(["", "## Active Overrides", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "Environment", "Blocker", "Actor", "Expires At"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("environment"),
+                    row.get("blocker"),
+                    row.get("actor"),
+                    row.get("expires_at"),
+                ]
+                for row in active_overrides[:10]
+            ],
+        )
+    )
+    lines.extend(["", "## Recent Releases", ""])
+    lines.extend(
+        _render_markdown_table(
+            ["Release", "State", "Created At", "Last Updated", "Summary"],
+            [
+                [
+                    row.get("release_name"),
+                    row.get("state"),
+                    row.get("created_at"),
+                    row.get("last_updated_at"),
+                    row.get("summary"),
+                ]
+                for row in releases[:10]
+            ],
+        )
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def cmd_export_governance_summary(
+    environments: list[str],
+    release_limit: int,
+    incident_limit: int,
+    override_limit: int,
+    output: str,
+    title: str,
+) -> int:
+    settings = load_settings()
+    selected_environments = environments or settings.environment_names
+    release_risk_board = get_release_risk_board(
+        environments=selected_environments,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        release_stale_minutes=settings.release_stale_minutes,
+        limit=release_limit,
+    ).to_dict()
+    approval_review_board = get_approval_review_board(
+        environments=selected_environments,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        approval_stale_minutes=settings.approval_stale_minutes,
+        limit=release_limit,
+    ).to_dict()
+    override_review_board = get_override_review_board(
+        ledger_path=settings.release_ledger_path,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        limit=override_limit,
+    ).to_dict()
+    active_overrides = [
+        row.to_dict()
+        for row in list_active_overrides(
+            ledger_path=settings.release_ledger_path,
+            release_name=None,
+            environment=None,
+            limit=override_limit,
+        )
+    ]
+    incident_review_board = get_incident_review_board(
+        ledger_path=settings.incident_ledger_path,
+        stale_minutes=settings.incident_stale_minutes,
+        status=None,
+        limit=incident_limit,
+    ).to_dict()
+    active_incidents = [
+        row.to_dict()
+        for row in list_incidents(
+            ledger_path=settings.incident_ledger_path,
+            status=None,
+            severity=None,
+            limit=incident_limit,
+        )
+        if row.status not in {"resolved", "closed"}
+    ]
+    releases = [row.to_dict() for row in list_releases(ledger_path=settings.release_ledger_path)]
+    payload = {
+        "generated_at": json.loads(json.dumps({"timestamp": "placeholder"}))["timestamp"],
+        "environments": selected_environments,
+        "release_risk_board": release_risk_board,
+        "approval_review_board": approval_review_board,
+        "incident_review_board": incident_review_board,
+        "override_review_board": override_review_board,
+        "active_incidents": active_incidents,
+        "active_overrides": active_overrides,
+        "releases": releases,
+        "metrics": {
+            "recorded_release_count": len(releases),
+            "high_risk_release_count": len([row for row in release_risk_board.get("rows", []) if row.get("risk_level") == "high"]),
+            "stale_release_count": len([row for row in release_risk_board.get("rows", []) if row.get("is_stale")]),
+            "approval_backlog_count": len(approval_review_board.get("rows", [])),
+            "stale_approval_count": len([row for row in approval_review_board.get("rows", []) if row.get("is_stale")]),
+            "active_incident_count": len(active_incidents),
+            "critical_incident_count": len([row for row in active_incidents if row.get("severity") == "critical"]),
+            "active_override_count": len(active_overrides),
+            "urgent_override_count": len([row for row in override_review_board.get("rows", []) if row.get("status") in {"expired", "expiring_soon"}]),
+        },
+    }
+    payload["generated_at"] = utc_now_iso()
+    output_path = Path(output) if output else settings.reports_dir / "governance-summary.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report_title = title.strip() or "Release Governance Summary"
+    output_path.write_text(
+        _render_governance_summary_markdown(payload, title=report_title),
+        encoding="utf-8",
+    )
+    print(json.dumps({"saved_to": str(output_path), "title": report_title, "metrics": payload["metrics"]}, indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -1475,6 +1734,15 @@ def main() -> int:
         return cmd_show_operator_handoff(args.snapshot, args.latest)
     if args.command == "export-operator-handoff-report":
         return cmd_export_operator_handoff_report(args.snapshot, args.latest, args.output, args.title)
+    if args.command == "export-governance-summary":
+        return cmd_export_governance_summary(
+            args.environments,
+            args.release_limit,
+            args.incident_limit,
+            args.override_limit,
+            args.output,
+            args.title,
+        )
     if args.command == "rollout-matrix":
         return cmd_rollout_matrix(args.release_name, args.environments)
     if args.command == "check-deploy-readiness":
