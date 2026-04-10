@@ -56,7 +56,9 @@ Default role policy keys:
 
 - `read_governance`
 - `read_jobs`
+- `read_storage`
 - `create_export_job`
+- `manage_storage`
 - `retry_job`
 - `approve_release`
 - `reject_release`
@@ -81,6 +83,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 ### Read Routes
 
 - `GET /health`
+- `GET /storage-status`
 - `GET /releases?limit=50`
 - `GET /releases/{release_name}`
 - `GET /release-risk-board?environment=staging&environment=production&limit=20`
@@ -107,6 +110,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/export-governance-summary`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
+- `POST /jobs/backup-control-plane-storage`
 - `POST /jobs/{job_id}/retry`
 
 ## Example Requests
@@ -119,6 +123,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/governance-summary
+```
+
+Inspect storage backend health and counts:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/storage-status
 ```
 
 Open an incident:
@@ -222,6 +236,23 @@ curl \
   http://127.0.0.1:8080/jobs/job-abc123def456/retry \
   -d '{
     "max_attempts": 2
+  }'
+```
+
+Queue a control-plane storage backup:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: ops-oncall-1" \
+  -H "X-Control-Plane-Role: ops-oncall" \
+  -H "Idempotency-Key: backup-control-plane-storage-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/backup-control-plane-storage \
+  -d '{
+    "label": "nightly",
+    "output": "/tmp/control-plane-nightly.zip"
   }'
 ```
 

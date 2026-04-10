@@ -9,6 +9,7 @@ from typing import Any, Callable, Protocol, runtime_checkable
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings
+from agent_architect_lab.control_plane.maintenance import backup_control_plane_storage
 from agent_architect_lab.control_plane.reporting import (
     export_governance_summary_report,
     export_operator_handoff_report,
@@ -349,6 +350,7 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "export_governance_summary": _handle_export_governance_summary,
         "record_operator_handoff": _handle_record_operator_handoff,
         "export_operator_handoff_report": _handle_export_operator_handoff_report,
+        "backup_control_plane_storage": _handle_backup_control_plane_storage,
     }
 
 
@@ -382,6 +384,14 @@ def _handle_export_operator_handoff_report(settings: Settings, payload: JobPaylo
         latest=bool(payload.get("latest", False)),
         output=str(payload.get("output", "")),
         title=str(payload.get("title", "")),
+    )
+
+
+def _handle_backup_control_plane_storage(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return backup_control_plane_storage(
+        settings,
+        output=str(payload.get("output", "")),
+        label=str(payload.get("label", "")),
     )
 
 

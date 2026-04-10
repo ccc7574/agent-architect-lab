@@ -123,11 +123,21 @@ def load_settings() -> Settings:
                         "incident-commander",
                         "qa-owner",
                     ],
+                    "read_storage": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                    ],
                     "create_export_job": [
                         "control-plane-admin",
                         "release-manager",
                         "ops-oncall",
                         "incident-commander",
+                    ],
+                    "manage_storage": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
                     ],
                     "retry_job": [
                         "control-plane-admin",

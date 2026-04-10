@@ -9,6 +9,11 @@ from re import sub
 from agent_architect_lab.agent.patterns import PATTERNS, recommend_pattern
 from agent_architect_lab.agent.runtime import AgentRuntime
 from agent_architect_lab.config import load_settings
+from agent_architect_lab.control_plane.maintenance import (
+    backup_control_plane_storage,
+    build_control_plane_storage_status,
+)
+from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.control_plane.server import (
     build_governance_summary_payload,
     create_control_plane_server,
@@ -82,6 +87,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_control_plane_server.add_argument("--host", default="", help="Optional bind host override.")
     run_control_plane_server.add_argument("--port", type=int, default=None, help="Optional bind port override.")
+    control_plane_storage_status_cmd = subparsers.add_parser(
+        "control-plane-storage-status",
+        help="Show control-plane storage backend status, counts, and integrity metadata.",
+    )
+    backup_control_plane_storage_cmd = subparsers.add_parser(
+        "backup-control-plane-storage",
+        help="Create a point-in-time control-plane storage backup archive.",
+    )
+    backup_control_plane_storage_cmd.add_argument("--output", default="", help="Optional output zip path.")
+    backup_control_plane_storage_cmd.add_argument("--label", default="", help="Optional label added to the backup file name.")
 
     list_skills = subparsers.add_parser("list-skills", help="Show skill manifests and optional matches.")
     list_skills.add_argument("--goal", default="", help="Optional goal to test skill matching.")
@@ -578,6 +593,20 @@ def cmd_run_control_plane_server(host: str, port: int | None) -> int:
         pass
     finally:
         server.server_close()
+    return 0
+
+
+def cmd_control_plane_storage_status() -> int:
+    settings = load_settings()
+    create_local_control_plane_repositories(settings)
+    print(json.dumps(build_control_plane_storage_status(settings), indent=2))
+    return 0
+
+
+def cmd_backup_control_plane_storage(output: str, label: str) -> int:
+    settings = load_settings()
+    create_local_control_plane_repositories(settings)
+    print(json.dumps(backup_control_plane_storage(settings, output=output, label=label), indent=2))
     return 0
 
 
@@ -1588,6 +1617,10 @@ def main() -> int:
         return cmd_run_mcp_server()
     if args.command == "run-control-plane-server":
         return cmd_run_control_plane_server(args.host, args.port)
+    if args.command == "control-plane-storage-status":
+        return cmd_control_plane_storage_status()
+    if args.command == "backup-control-plane-storage":
+        return cmd_backup_control_plane_storage(args.output, args.label)
     if args.command == "list-skills":
         return cmd_list_skills(args.goal)
     if args.command == "explain-patterns":

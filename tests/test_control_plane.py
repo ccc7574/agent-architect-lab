@@ -6,10 +6,13 @@ import json
 import sqlite3
 import threading
 import time
+import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
 
 from agent_architect_lab.cli import (
+    cmd_backup_control_plane_storage,
+    cmd_control_plane_storage_status,
     cmd_approve_release,
     cmd_open_incident,
     cmd_run_evals,
@@ -932,6 +935,92 @@ def test_control_plane_server_supports_sqlite_backend(monkeypatch, tmp_path: Pat
         thread.join(timeout=5)
 
 
+def test_control_plane_server_reports_storage_status_and_runs_backup_job(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "GET",
+            "/storage-status",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        status_response = connection.getresponse()
+        status_payload = json.loads(status_response.read().decode("utf-8"))
+
+        connection.request(
+            "POST",
+            "/jobs/backup-control-plane-storage",
+            body=json.dumps(
+                {
+                    "label": "nightly",
+                    "output": str(tmp_path / "control-plane-nightly.zip"),
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="backup-control-plane-storage-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        final_payload = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                final_payload = job_payload
+                break
+        connection.close()
+
+        backup_path = Path(final_payload["result_payload"]["saved_to"]) if final_payload is not None else None
+        assert status_response.status == 200
+        assert status_payload["backend"] == "sqlite"
+        assert status_payload["schema_version"] == 2
+        assert status_payload["integrity_check"] == "ok"
+        assert create_response.status == 202
+        assert final_payload is not None
+        assert final_payload["status"] == "succeeded"
+        assert backup_path is not None and backup_path.exists()
+        with zipfile.ZipFile(backup_path) as archive:
+            names = set(archive.namelist())
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert "sqlite/control-plane.sqlite3" in names
+        assert manifest["backend"] == "sqlite"
+        assert manifest["storage_status"]["schema_version"] == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_sqlite_control_plane_repositories_migrate_legacy_schema(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
     settings = load_settings()
@@ -1025,3 +1114,27 @@ def test_sqlite_control_plane_repositories_migrate_legacy_schema(monkeypatch, tm
     assert migrated_events
     assert migrated_events[0].payload["audit_event_id"] == "audit-legacy-1"
     assert migrated_events[0].payload["route_policy_key"] == "read_governance"
+
+
+def test_control_plane_storage_cli_status_and_backup(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+
+    status_stdout = io.StringIO()
+    with redirect_stdout(status_stdout):
+        assert cmd_control_plane_storage_status() == 0
+    status_payload = json.loads(status_stdout.getvalue())
+
+    backup_stdout = io.StringIO()
+    backup_path = tmp_path / "cli-control-plane-backup.zip"
+    with redirect_stdout(backup_stdout):
+        assert cmd_backup_control_plane_storage(str(backup_path), "cli") == 0
+    backup_payload = json.loads(backup_stdout.getvalue())
+
+    assert status_payload["backend"] == "sqlite"
+    assert status_payload["schema_version"] == 2
+    assert backup_payload["backend"] == "sqlite"
+    assert Path(backup_payload["saved_to"]).exists()
+    with zipfile.ZipFile(backup_path) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert manifest["backend"] == "sqlite"

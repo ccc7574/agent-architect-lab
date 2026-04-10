@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
 from agent_architect_lab.control_plane.jobs import ControlPlaneJobRepository, ControlPlaneJobWorker
+from agent_architect_lab.control_plane.maintenance import build_control_plane_storage_status
 from agent_architect_lab.control_plane.policies import (
     AuthorizationContext,
     ControlPlanePolicyEngine,
@@ -145,6 +146,11 @@ class ControlPlaneApp:
                         },
                     },
                 ))
+            if method == "GET" and path == "/storage-status":
+                _authorization, auth_error = authorize("read", "read_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(ControlPlaneResponse(200, build_control_plane_storage_status(self.settings)))
             if method == "GET" and path == "/release-risk-board":
                 _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
@@ -393,6 +399,30 @@ class ControlPlaneApp:
                                 "latest": _optional_bool(payload, "latest", default=False),
                                 "output": _optional_string(payload, "output") or "",
                                 "title": _optional_string(payload, "title") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/backup-control-plane-storage":
+                authorization, auth_error = authorize("write", "manage_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="backup_control_plane_storage",
+                            payload={
+                                "output": _optional_string(payload, "output") or "",
+                                "label": _optional_string(payload, "label") or "",
                             },
                             authorization=authorization,
                             request_id=request_id,
@@ -1221,6 +1251,8 @@ def _route_policy_key_for_path(method: str, path: str) -> str:
             return "create_export_job"
         if path == "/jobs/export-operator-handoff-report":
             return "create_export_job"
+        if path == "/jobs/backup-control-plane-storage":
+            return "manage_storage"
         if re.fullmatch(r"/jobs/[^/]+/retry", path):
             return "retry_job"
         if path == "/incidents/open":
