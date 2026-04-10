@@ -196,6 +196,7 @@ State-changing routes also require an `Idempotency-Key` header. The first succes
 Control-plane mutation audits are written under `artifacts/control-plane/mutation-requests.jsonl`, and idempotency state is stored under `artifacts/control-plane/idempotency-registry.json`.
 Long-running exports now run through a persisted job registry at `artifacts/control-plane/job-registry.json`.
 The embedded worker polls that registry on `AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_POLL_INTERVAL_S`, which defaults to `0.25`.
+Control-plane policy decisions now flow through a centralized policy engine, and mutation persistence now goes through repository-style abstractions instead of being hardcoded inside request handlers.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.

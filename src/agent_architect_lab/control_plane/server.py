@@ -5,14 +5,23 @@ import json
 import re
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
 from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
+from agent_architect_lab.control_plane.policies import (
+    AuthorizationContext,
+    ControlPlanePolicyEngine,
+    IdentityContext,
+)
 from agent_architect_lab.control_plane.reporting import build_governance_summary_payload
+from agent_architect_lab.control_plane.storage import (
+    IdempotencyRecord,
+    JsonAuditLogRepository,
+    JsonIdempotencyRepository,
+)
 from agent_architect_lab.harness.incidents import get_incident_review_board, open_incident, transition_incident
 from agent_architect_lab.harness.ledger import (
     deploy_release,
@@ -33,83 +42,6 @@ class ControlPlaneResponse:
     status_code: int
     payload: dict[str, Any]
     headers: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class AuthorizationContext:
-    token_scope: str
-    actor: str | None = None
-    role: str | None = None
-
-
-@dataclass(slots=True)
-class IdempotencyRecord:
-    idempotency_key: str
-    method: str
-    path: str
-    request_fingerprint: str
-    operation_id: str
-    committed_at: str
-    status_code: int
-    response_payload: dict[str, Any]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "idempotency_key": self.idempotency_key,
-            "method": self.method,
-            "path": self.path,
-            "request_fingerprint": self.request_fingerprint,
-            "operation_id": self.operation_id,
-            "committed_at": self.committed_at,
-            "status_code": self.status_code,
-            "response_payload": self.response_payload,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "IdempotencyRecord":
-        return cls(
-            idempotency_key=str(payload["idempotency_key"]),
-            method=str(payload["method"]),
-            path=str(payload["path"]),
-            request_fingerprint=str(payload["request_fingerprint"]),
-            operation_id=str(payload["operation_id"]),
-            committed_at=str(payload["committed_at"]),
-            status_code=int(payload["status_code"]),
-            response_payload=dict(payload["response_payload"]),
-        )
-
-
-@dataclass(slots=True)
-class IdempotencyRegistry:
-    records: dict[str, IdempotencyRecord] = field(default_factory=dict)
-
-    def get(self, idempotency_key: str) -> IdempotencyRecord | None:
-        return self.records.get(idempotency_key)
-
-    def set(self, record: IdempotencyRecord) -> None:
-        self.records[record.idempotency_key] = record
-
-    def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "records": {
-                key: record.to_dict()
-                for key, record in sorted(self.records.items())
-            }
-        }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    @classmethod
-    def load(cls, path: Path) -> "IdempotencyRegistry":
-        if not path.exists():
-            return cls()
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return cls(
-            records={
-                key: IdempotencyRecord.from_dict(record)
-                for key, record in payload.get("records", {}).items()
-            }
-        )
 
 
 @dataclass(slots=True)
@@ -152,6 +84,9 @@ class ControlPlaneApp:
     auth: ControlPlaneAuth
     job_store: ControlPlaneJobStore
     job_worker: ControlPlaneJobWorker
+    idempotency_repository: JsonIdempotencyRepository
+    audit_repository: JsonAuditLogRepository
+    policy_engine: ControlPlanePolicyEngine
 
     def handle_request(
         self,
@@ -661,25 +596,15 @@ class ControlPlaneApp:
         token_scope, auth_error = self.auth.authenticate(scope, headers)
         if auth_error is not None:
             return None, auth_error
-        allowed_roles = self.settings.control_plane_role_policies.get(route_policy_key, [])
         identity = _identity_context(headers)
-        if allowed_roles:
-            if identity is None:
-                return None, _error_response(
-                    400,
-                    "missing_identity",
-                    "Headers 'X-Control-Plane-Actor' and 'X-Control-Plane-Role' are required for this route.",
-                )
-            if identity.role not in allowed_roles:
-                return None, _error_response(
-                    403,
-                    "forbidden_role",
-                    f"Role '{identity.role}' is not permitted for route policy '{route_policy_key}'.",
-                )
-            return AuthorizationContext(token_scope=token_scope or scope, actor=identity.actor, role=identity.role), None
-        if identity is not None:
-            return AuthorizationContext(token_scope=token_scope or scope, actor=identity.actor, role=identity.role), None
-        return AuthorizationContext(token_scope=token_scope or scope), None
+        authorization, decision = self.policy_engine.authorize_route(
+            route_policy_key=route_policy_key,
+            identity=identity,
+            token_scope=token_scope or scope,
+        )
+        if decision.allowed:
+            return authorization, None
+        return None, _error_response(400 if decision.code == "missing_identity" else 403, decision.code, decision.message)
 
     def _execute_mutation(
         self,
@@ -695,8 +620,7 @@ class ControlPlaneApp:
     ) -> ControlPlaneResponse:
         idempotency_key = _required_idempotency_key(headers)
         request_fingerprint = _request_fingerprint(method, path, body)
-        registry = IdempotencyRegistry.load(self.settings.control_plane_idempotency_path)
-        existing = registry.get(idempotency_key)
+        existing = self.idempotency_repository.get(idempotency_key)
         if existing is not None:
             if existing.request_fingerprint != request_fingerprint:
                 response = _error_response(
@@ -744,6 +668,13 @@ class ControlPlaneApp:
             return response
 
         payload = _load_json_body(body)
+        payload_decision = self.policy_engine.validate_payload(
+            route_policy_key=_route_policy_key_for_path(method, path),
+            authorization=authorization,
+            payload=payload,
+        )
+        if not payload_decision.allowed:
+            return _error_response(403, payload_decision.code, payload_decision.message)
         result_payload = handler(payload)
         operation_id = f"op-{uuid4().hex[:12]}"
         committed_at = utc_now_iso()
@@ -755,7 +686,7 @@ class ControlPlaneApp:
             replayed=False,
             committed_at=committed_at,
         )
-        registry.set(
+        self.idempotency_repository.save(
             IdempotencyRecord(
                 idempotency_key=idempotency_key,
                 method=method,
@@ -767,7 +698,6 @@ class ControlPlaneApp:
                 response_payload=response.payload,
             )
         )
-        registry.save(self.settings.control_plane_idempotency_path)
         self._append_mutation_audit(
             request_id=request_id,
             method=method,
@@ -855,7 +785,6 @@ class ControlPlaneApp:
         replayed: bool,
         conflict: bool,
     ) -> None:
-        self.settings.control_plane_request_log_path.parent.mkdir(parents=True, exist_ok=True)
         audit_entry = {
             "audit_event_id": f"audit-{uuid4().hex[:12]}",
             "request_id": request_id,
@@ -875,8 +804,7 @@ class ControlPlaneApp:
             "replayed": replayed,
             "conflict": conflict,
         }
-        with self.settings.control_plane_request_log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(audit_entry, sort_keys=True) + "\n")
+        self.audit_repository.append(audit_entry)
 
 
 class ControlPlaneHTTPServer(ThreadingHTTPServer):
@@ -908,6 +836,9 @@ def create_control_plane_server(
         ),
         job_store=job_store,
         job_worker=job_worker,
+        idempotency_repository=JsonIdempotencyRepository(resolved_settings.control_plane_idempotency_path),
+        audit_repository=JsonAuditLogRepository(resolved_settings.control_plane_request_log_path),
+        policy_engine=ControlPlanePolicyEngine(resolved_settings.control_plane_role_policies),
     )
     server = ControlPlaneHTTPServer(
         (host or resolved_settings.control_plane_host, port if port is not None else resolved_settings.control_plane_port),
@@ -1092,6 +1023,35 @@ def _optional_string_list(payload: Mapping[str, Any], key: str) -> list[str]:
         if stripped:
             items.append(stripped)
     return items
+
+
+def _route_policy_key_for_path(method: str, path: str) -> str:
+    if method == "POST":
+        if path == "/jobs/export-governance-summary":
+            return "create_export_job"
+        if path == "/jobs/record-operator-handoff":
+            return "create_export_job"
+        if path == "/jobs/export-operator-handoff-report":
+            return "create_export_job"
+        if path == "/incidents/open":
+            return "open_incident"
+        if re.fullmatch(r"/incidents/[^/]+/transition", path):
+            return "transition_incident"
+        if re.fullmatch(r"/releases/[^/]+/approve", path):
+            return "approve_release"
+        if re.fullmatch(r"/releases/[^/]+/reject", path):
+            return "reject_release"
+        if re.fullmatch(r"/releases/[^/]+/promote", path):
+            return "promote_release"
+        if re.fullmatch(r"/releases/[^/]+/deploy", path):
+            return "deploy_release"
+        if re.fullmatch(r"/releases/[^/]+/rollback", path):
+            return "deploy_release"
+        if re.fullmatch(r"/releases/[^/]+/overrides/grant", path):
+            return "manage_release_override"
+        if re.fullmatch(r"/releases/[^/]+/overrides/revoke", path):
+            return "manage_release_override"
+    return ""
 
 
 def _normalize_path(path: str) -> str:

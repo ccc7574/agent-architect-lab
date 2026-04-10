@@ -2,6 +2,12 @@
 
 `agent-architect-lab` 现在已经在现有 release / incident ledger 之上提供了一个轻量 HTTP control plane。
 
+当前 control plane 内部已经拆成三层：
+
+- `server.py`：HTTP 路由和统一响应 envelope
+- `policies.py`：集中式 route / payload policy 校验
+- `storage.py` / `jobs.py`：持久化 repository 和持久化的内置 job 执行
+
 ## 为什么要有这一层
 
 - 让治理能力不再只停留在 CLI
@@ -194,7 +200,7 @@ curl \
 - 当前写接口只覆盖 incident 创建与状态推进
 - 长时间运行的导出已经走持久化 worker，但还不是分布式队列
 - 存储仍然是本地 artifact JSON，而不是外部数据库
-- 权限现在已经是 token + route-level role policy，但还不是完整统一的 RBAC / policy engine
+- 权限现在已经通过集中式 route/payload policy engine 执行，但还不是完整统一的 RBAC 或外部 policy service
 - 现在已经有幂等、审计和 job persistence，但还没有分布式队列、分布式锁和更强的一致性协调
 
 这意味着它已经足够像一套内部生产治理服务，可以支撑本地演练和内部工具接入，同时仍然保持依赖轻、容易测试。

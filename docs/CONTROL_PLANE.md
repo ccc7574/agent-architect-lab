@@ -2,6 +2,12 @@
 
 `agent-architect-lab` now exposes a lightweight internal HTTP control plane on top of the existing release and incident ledgers.
 
+The control plane now has three internal layers:
+
+- `server.py`: HTTP routing and response envelope
+- `policies.py`: centralized route and payload policy checks
+- `storage.py` / `jobs.py`: persistence repositories plus persisted in-process job execution
+
 ## Why It Exists
 
 - Keep the governance model reusable outside the CLI
@@ -194,7 +200,7 @@ This control plane is intentionally narrow:
 - write models currently cover incident creation and incident transition
 - long-running exports already run through a persisted in-process worker, but not a distributed queue
 - storage is still local artifact-backed JSON, not an external database
-- access control is token plus route-level role policy, not yet a full centralized RBAC or policy engine
+- access control now goes through a centralized route/payload policy engine, but it is not yet a full RBAC or external policy service
 - idempotency, audit, and job persistence exist, but there is no distributed queue or lock coordination yet
 
 That makes it suitable for local production-style drills and internal tooling, while keeping the repo dependency-light and testable.

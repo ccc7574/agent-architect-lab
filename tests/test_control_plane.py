@@ -16,7 +16,9 @@ from agent_architect_lab.cli import (
 )
 from agent_architect_lab.config import load_settings
 from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
+from agent_architect_lab.control_plane.policies import ControlPlanePolicyEngine
 from agent_architect_lab.control_plane.server import ControlPlaneApp, ControlPlaneAuth, create_control_plane_server
+from agent_architect_lab.control_plane.storage import JsonAuditLogRepository, JsonIdempotencyRepository
 
 
 def _configure_env(monkeypatch, tmp_path: Path, *, mutation_token: str | None = "writer-token") -> None:
@@ -92,6 +94,9 @@ def _build_app(settings) -> ControlPlaneApp:
         ),
         job_store=job_store,
         job_worker=job_worker,
+        idempotency_repository=JsonIdempotencyRepository(settings.control_plane_idempotency_path),
+        audit_repository=JsonAuditLogRepository(settings.control_plane_request_log_path),
+        policy_engine=ControlPlanePolicyEngine(settings.control_plane_role_policies),
     )
 
 
@@ -376,6 +381,28 @@ def test_control_plane_app_approves_release_via_control_plane(monkeypatch, tmp_p
     assert fetched.status_code == 200
     assert fetched.payload["release_name"] == "release-b"
     assert fetched.payload["approvals"][0]["actor"] == "qa-owner-1"
+
+
+def test_control_plane_app_blocks_mismatched_approval_role(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_candidate()
+    settings = load_settings()
+    app = _build_app(settings)
+
+    response = app.handle_request(
+        "POST",
+        "/releases/release-b/approve",
+        _request_headers(
+            "writer-token",
+            actor="qa-owner-1",
+            role="qa-owner",
+            idempotency_key="approve-release-b-2",
+        ),
+        json.dumps({"note": "wrong role attempt", "role": "release-manager"}).encode("utf-8"),
+    )
+
+    assert response.status_code == 403
+    assert response.payload["error"]["code"] == "forbidden_approval_role"
 
 
 def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, tmp_path: Path) -> None:
