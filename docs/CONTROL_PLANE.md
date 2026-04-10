@@ -37,6 +37,7 @@ The server is stdlib-only and keeps artifact storage exactly where the CLI keeps
 - If `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN` is unset, mutation routes return `503`
 - Successful mutation responses are cached by idempotency key and replayed on retries
 - Mutation request audits are appended to `artifacts/control-plane/mutation-requests.jsonl`
+- The audit log now records successful mutations plus authentication, authorization, identity, and payload-policy denials
 - Idempotency registry state is persisted in `artifacts/control-plane/idempotency-registry.json`
 - Long-running exports are persisted in `artifacts/control-plane/job-registry.json`
 - Every API response now includes `_meta.request_id` for correlation
@@ -79,7 +80,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
-- `GET /audit-events?request_id=req-...&operation_id=op-...&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
+- `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
 - `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`
 
@@ -223,6 +224,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   "http://127.0.0.1:8080/audit-events?actor=incident-commander-1&method=POST&path=/incidents/open&replayed=true&limit=20"
+```
+
+Inspect denied requests for policy or identity failures:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  "http://127.0.0.1:8080/audit-events?event_type=authorization_denied&error_code=missing_identity&limit=20"
 ```
 
 Inspect a stored idempotent mutation:

@@ -147,11 +147,25 @@ def test_control_plane_app_requires_identity_for_governance_routes(monkeypatch, 
         _auth_header("reader-token"),
         b"",
     )
+    audit_query = app.handle_request(
+        "GET",
+        "/audit-events?event_type=authorization_denied&error_code=missing_identity&path=/governance-summary",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
 
     assert response.status_code == 400
     assert response.payload["error"]["code"] == "missing_identity"
     assert response.payload["error"]["details"]["route_policy_key"] == "read_governance"
     assert response.payload["error"]["details"]["required_headers"] == ["X-Control-Plane-Actor", "X-Control-Plane-Role"]
+    assert audit_query.status_code == 200
+    assert audit_query.payload["rows"]
+    assert audit_query.payload["rows"][0]["event_type"] == "authorization_denied"
+    assert audit_query.payload["rows"][0]["error_code"] == "missing_identity"
 
 
 def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -> None:
@@ -451,11 +465,25 @@ def test_control_plane_app_blocks_mismatched_approval_role(monkeypatch, tmp_path
         ),
         json.dumps({"note": "wrong role attempt", "role": "release-manager"}).encode("utf-8"),
     )
+    audit_query = app.handle_request(
+        "GET",
+        "/audit-events?event_type=payload_denied&error_code=forbidden_approval_role&path=/releases/release-b/approve",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
 
     assert response.status_code == 403
     assert response.payload["error"]["code"] == "forbidden_approval_role"
     assert response.payload["error"]["details"]["route_policy_key"] == "approve_release"
     assert response.payload["error"]["details"]["requested_role"] == "release-manager"
+    assert audit_query.status_code == 200
+    assert audit_query.payload["rows"]
+    assert audit_query.payload["rows"][0]["event_type"] == "payload_denied"
+    assert audit_query.payload["rows"][0]["error_code"] == "forbidden_approval_role"
 
 
 def test_control_plane_worker_retries_job_until_success(monkeypatch, tmp_path: Path) -> None:

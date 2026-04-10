@@ -104,6 +104,14 @@ class ControlPlaneApp:
         path = _normalize_path(parsed.path)
         query = parse_qs(parsed.query, keep_blank_values=False)
         respond = lambda response: self._attach_response_envelope(response, request_id=request_id)
+        authorize = lambda scope, route_policy_key: self._authorize_route(
+            request_id=request_id,
+            method=method,
+            path=path,
+            scope=scope,
+            route_policy_key=route_policy_key,
+            headers=headers,
+        )
 
         try:
             if method == "GET" and path == "/health":
@@ -124,11 +132,7 @@ class ControlPlaneApp:
                     },
                 ))
             if method == "GET" and path == "/release-risk-board":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_governance",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
                     return respond(auth_error)
                 environments = _query_environments(query, self.settings)
@@ -146,11 +150,7 @@ class ControlPlaneApp:
                 ).to_dict()
                 return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/approval-review-board":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_governance",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
                     return respond(auth_error)
                 environments = _query_environments(query, self.settings)
@@ -167,11 +167,7 @@ class ControlPlaneApp:
                 ).to_dict()
                 return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/incident-review-board":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_governance",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
                     return respond(auth_error)
                 status = _query_optional_string(
@@ -188,11 +184,7 @@ class ControlPlaneApp:
                 ).to_dict()
                 return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/governance-summary":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_governance",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
                     return respond(auth_error)
                 payload = build_governance_summary_payload(
@@ -204,11 +196,7 @@ class ControlPlaneApp:
                 )
                 return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/releases":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_governance",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
                     return respond(auth_error)
                 limit = _query_int(query, "limit", default=50, minimum=1)
@@ -216,21 +204,13 @@ class ControlPlaneApp:
                 return respond(ControlPlaneResponse(200, payload))
             release_match = re.fullmatch(r"/releases/([^/]+)", path)
             if method == "GET" and release_match is not None:
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_governance",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
                     return respond(auth_error)
                 payload = get_release_record(release_match.group(1), ledger_path=self.settings.release_ledger_path).to_dict()
                 return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/jobs":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_jobs",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
                     return respond(auth_error)
                 status = _query_optional_string(
@@ -252,22 +232,14 @@ class ControlPlaneApp:
                 return respond(ControlPlaneResponse(200, {"rows": jobs, "total": len(jobs)}))
             job_match = re.fullmatch(r"/jobs/([^/]+)", path)
             if method == "GET" and job_match is not None:
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_jobs",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
                     return respond(auth_error)
                 job = self.job_store.get_job(job_match.group(1))
                 return respond(ControlPlaneResponse(200, job.to_dict()))
             job_retry_match = re.fullmatch(r"/jobs/([^/]+)/retry", path)
             if method == "POST" and job_retry_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="retry_job",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "retry_job")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(
@@ -283,11 +255,7 @@ class ControlPlaneApp:
                     )
                 )
             if method == "GET" and path == "/audit-events":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_jobs",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
                     return respond(auth_error)
                 limit = _query_int(query, "limit", default=100, minimum=1)
@@ -298,6 +266,8 @@ class ControlPlaneApp:
                     for event in self.audit_repository.list_events(
                         request_id=request_id_filter,
                         operation_id=operation_id_filter,
+                        event_type=_query_optional_string(query, "event_type"),
+                        error_code=_query_optional_string(query, "error_code"),
                         actor=_query_optional_string(query, "actor"),
                         role=_query_optional_string(query, "role"),
                         path=_query_optional_string(query, "path"),
@@ -310,11 +280,7 @@ class ControlPlaneApp:
                 ]
                 return respond(ControlPlaneResponse(200, {"rows": events, "total": len(events)}))
             if method == "GET" and path == "/idempotency-records":
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_jobs",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
                     return respond(auth_error)
                 limit = _query_int(query, "limit", default=100, minimum=1)
@@ -331,11 +297,7 @@ class ControlPlaneApp:
                 return respond(ControlPlaneResponse(200, {"rows": rows, "total": len(rows)}))
             idempotency_match = re.fullmatch(r"/idempotency-records/([^/]+)", path)
             if method == "GET" and idempotency_match is not None:
-                _authorization, auth_error = self._authorize_route(
-                    scope="read",
-                    route_policy_key="read_jobs",
-                    headers=headers,
-                )
+                _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
                     return respond(auth_error)
                 record = self.idempotency_repository.get(idempotency_match.group(1))
@@ -343,11 +305,7 @@ class ControlPlaneApp:
                     return respond(_error_response(404, "not_found", f"Unknown idempotency key '{idempotency_match.group(1)}'."))
                 return respond(ControlPlaneResponse(200, record.to_dict()))
             if method == "POST" and path == "/jobs/export-governance-summary":
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="create_export_job",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "create_export_job")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(
@@ -375,11 +333,7 @@ class ControlPlaneApp:
                     )
                 )
             if method == "POST" and path == "/jobs/record-operator-handoff":
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="create_export_job",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "create_export_job")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(
@@ -406,11 +360,7 @@ class ControlPlaneApp:
                     )
                 )
             if method == "POST" and path == "/jobs/export-operator-handoff-report":
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="create_export_job",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "create_export_job")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(
@@ -437,11 +387,7 @@ class ControlPlaneApp:
                 )
             release_approve_match = re.fullmatch(r"/releases/([^/]+)/approve", path)
             if method == "POST" and release_approve_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="approve_release",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "approve_release")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -463,11 +409,7 @@ class ControlPlaneApp:
                 ))
             release_reject_match = re.fullmatch(r"/releases/([^/]+)/reject", path)
             if method == "POST" and release_reject_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="reject_release",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "reject_release")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -488,11 +430,7 @@ class ControlPlaneApp:
                 ))
             release_promote_match = re.fullmatch(r"/releases/([^/]+)/promote", path)
             if method == "POST" and release_promote_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="promote_release",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "promote_release")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -513,11 +451,7 @@ class ControlPlaneApp:
                 ))
             release_deploy_match = re.fullmatch(r"/releases/([^/]+)/deploy", path)
             if method == "POST" and release_deploy_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="deploy_release",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "deploy_release")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -542,11 +476,7 @@ class ControlPlaneApp:
                 ))
             release_rollback_match = re.fullmatch(r"/releases/([^/]+)/rollback", path)
             if method == "POST" and release_rollback_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="deploy_release",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "deploy_release")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -567,11 +497,7 @@ class ControlPlaneApp:
                 ))
             release_override_grant_match = re.fullmatch(r"/releases/([^/]+)/overrides/grant", path)
             if method == "POST" and release_override_grant_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="manage_release_override",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "manage_release_override")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -594,11 +520,7 @@ class ControlPlaneApp:
                 ))
             release_override_revoke_match = re.fullmatch(r"/releases/([^/]+)/overrides/revoke", path)
             if method == "POST" and release_override_revoke_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="manage_release_override",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "manage_release_override")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -619,11 +541,7 @@ class ControlPlaneApp:
                     success_status_code=200,
                 ))
             if method == "POST" and path == "/incidents/open":
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="open_incident",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "open_incident")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -647,11 +565,7 @@ class ControlPlaneApp:
                 ))
             transition_match = re.fullmatch(r"/incidents/([^/]+)/transition", path)
             if method == "POST" and transition_match is not None:
-                authorization, auth_error = self._authorize_route(
-                    scope="write",
-                    route_policy_key="transition_incident",
-                    headers=headers,
-                )
+                authorization, auth_error = authorize("write", "transition_incident")
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(self._execute_mutation(
@@ -683,14 +597,55 @@ class ControlPlaneApp:
     def _authorize_route(
         self,
         *,
+        request_id: str,
+        method: str,
+        path: str,
         scope: str,
         route_policy_key: str,
         headers: Mapping[str, str],
     ) -> tuple[AuthorizationContext | None, ControlPlaneResponse | None]:
         token_scope, auth_error = self.auth.authenticate(scope, headers)
         if auth_error is not None:
+            self._append_denied_request_audit(
+                event_type="authentication_denied",
+                request_id=request_id,
+                method=method,
+                path=path,
+                route_policy_key=route_policy_key,
+                headers=headers,
+                response=auth_error,
+                decision_details={"scope": scope},
+                actor=None,
+                role=None,
+                token_scope=None,
+            )
             return None, auth_error
-        identity = _identity_context(headers)
+        try:
+            identity = _identity_context(headers)
+        except ValueError as exc:
+            response = _error_response(
+                400,
+                "invalid_request",
+                str(exc),
+                details={
+                    "route_policy_key": route_policy_key,
+                    "required_headers": ["X-Control-Plane-Actor", "X-Control-Plane-Role"],
+                },
+            )
+            self._append_denied_request_audit(
+                event_type="identity_invalid",
+                request_id=request_id,
+                method=method,
+                path=path,
+                route_policy_key=route_policy_key,
+                headers=headers,
+                response=response,
+                decision_details=response.payload["error"].get("details", {}),
+                actor=None,
+                role=None,
+                token_scope=token_scope,
+            )
+            return None, response
         authorization, decision = self.policy_engine.authorize_route(
             route_policy_key=route_policy_key,
             identity=identity,
@@ -698,12 +653,26 @@ class ControlPlaneApp:
         )
         if decision.allowed:
             return authorization, None
-        return None, _error_response(
+        response = _error_response(
             400 if decision.code == "missing_identity" else 403,
             decision.code,
             decision.message,
             details=decision.details,
         )
+        self._append_denied_request_audit(
+            event_type="authorization_denied",
+            request_id=request_id,
+            method=method,
+            path=path,
+            route_policy_key=route_policy_key,
+            headers=headers,
+            response=response,
+            decision_details=decision.details,
+            actor=identity.actor if identity is not None else None,
+            role=identity.role if identity is not None else None,
+            token_scope=token_scope,
+        )
+        return None, response
 
     def _execute_mutation(
         self,
@@ -773,12 +742,29 @@ class ControlPlaneApp:
             payload=payload,
         )
         if not payload_decision.allowed:
-            return _error_response(
+            response = _error_response(
                 403,
                 payload_decision.code,
                 payload_decision.message,
                 details=payload_decision.details,
             )
+            self._append_denied_request_audit(
+                event_type="payload_denied",
+                request_id=request_id,
+                method=method,
+                path=path,
+                route_policy_key=_route_policy_key_for_path(method, path),
+                headers=headers,
+                response=response,
+                decision_details=payload_decision.details,
+                actor=authorization.actor if authorization is not None else None,
+                role=authorization.role if authorization is not None else None,
+                token_scope=authorization.token_scope if authorization is not None else None,
+                body=body,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            return response
         result_payload = handler(payload)
         operation_id = f"op-{uuid4().hex[:12]}"
         committed_at = utc_now_iso()
@@ -898,6 +884,11 @@ class ControlPlaneApp:
     ) -> None:
         audit_entry = {
             "audit_event_id": f"audit-{uuid4().hex[:12]}",
+            "event_type": (
+                "mutation_conflict"
+                if conflict
+                else ("mutation_replayed" if replayed else "mutation_committed")
+            ),
             "request_id": request_id,
             "occurred_at": utc_now_iso(),
             "operation_id": operation_id,
@@ -912,10 +903,55 @@ class ControlPlaneApp:
             "request_body": _audit_request_body(body),
             "status_code": response.status_code,
             "response_payload": response.payload,
+            "error_code": _response_error_code(response),
             "replayed": replayed,
             "conflict": conflict,
         }
         self.audit_repository.append(audit_entry)
+
+    def _append_denied_request_audit(
+        self,
+        *,
+        event_type: str,
+        request_id: str,
+        method: str,
+        path: str,
+        route_policy_key: str,
+        headers: Mapping[str, str],
+        response: ControlPlaneResponse,
+        decision_details: Mapping[str, Any],
+        actor: str | None,
+        role: str | None,
+        token_scope: str | None,
+        body: bytes = b"",
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> None:
+        self.audit_repository.append(
+            {
+                "audit_event_id": f"audit-{uuid4().hex[:12]}",
+                "event_type": event_type,
+                "request_id": request_id,
+                "occurred_at": utc_now_iso(),
+                "operation_id": None,
+                "method": method,
+                "path": path,
+                "route_policy_key": route_policy_key,
+                "idempotency_key": idempotency_key,
+                "request_fingerprint": request_fingerprint,
+                "token_scope": token_scope,
+                "token_fingerprint": _token_fingerprint(_header_value(headers, "Authorization") or ""),
+                "actor": actor,
+                "role": role,
+                "request_body": _audit_request_body(body),
+                "status_code": response.status_code,
+                "response_payload": response.payload,
+                "error_code": _response_error_code(response),
+                "replayed": False,
+                "conflict": False,
+                "policy_details": dict(decision_details),
+            }
+        )
 
 
 class ControlPlaneHTTPServer(ThreadingHTTPServer):
@@ -1096,6 +1132,16 @@ def _token_fingerprint(header_value: str) -> str | None:
     if not token:
         return None
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def _response_error_code(response: ControlPlaneResponse) -> str | None:
+    error = response.payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    code = error.get("code")
+    if not isinstance(code, str):
+        return None
+    return code
 
 
 def _required_string(payload: Mapping[str, Any], key: str) -> str:

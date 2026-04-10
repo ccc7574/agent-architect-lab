@@ -37,6 +37,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 - 如果没有配置 `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN`，所有写接口都会返回 `503`
 - 成功的写请求会按 idempotency key 缓存首个响应，后续重试直接重放
 - mutation 审计日志会追加写入 `artifacts/control-plane/mutation-requests.jsonl`
+- 审计日志现在不仅记录成功 mutation，也记录认证失败、权限拒绝、identity 错误和 payload policy 拒绝
 - idempotency 状态会持久化到 `artifacts/control-plane/idempotency-registry.json`
 - 长时间运行的导出任务会持久化到 `artifacts/control-plane/job-registry.json`
 - 每个 API 响应现在都会带 `_meta.request_id` 方便串联日志和审计
@@ -79,7 +80,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
-- `GET /audit-events?request_id=req-...&operation_id=op-...&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
+- `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
 - `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`
 
@@ -223,6 +224,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   "http://127.0.0.1:8080/audit-events?actor=incident-commander-1&method=POST&path=/incidents/open&replayed=true&limit=20"
+```
+
+查看由于 policy 或 identity 问题被拒绝的请求：
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  "http://127.0.0.1:8080/audit-events?event_type=authorization_denied&error_code=missing_identity&limit=20"
 ```
 
 查看一条已保存的幂等记录：
