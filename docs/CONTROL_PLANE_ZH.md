@@ -24,12 +24,29 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 - `GET /health` 不需要鉴权
 - 读接口接受 `Authorization: Bearer <read-token>`
 - 读接口也接受 mutation token
+- 受保护路由还可能要求 `X-Control-Plane-Actor` 和 `X-Control-Plane-Role`
 - 写接口必须使用 `Authorization: Bearer <mutation-token>`
 - 写接口还必须带上 `Idempotency-Key: <key>`
 - 如果没有配置 `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN`，所有写接口都会返回 `503`
 - 成功的写请求会按 idempotency key 缓存首个响应，后续重试直接重放
 - mutation 审计日志会追加写入 `artifacts/control-plane/mutation-requests.jsonl`
 - idempotency 状态会持久化到 `artifacts/control-plane/idempotency-registry.json`
+
+默认内置的 role policy key：
+
+- `read_governance`
+- `open_incident`
+- `transition_incident`
+
+可以通过 `AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES` 覆盖，例如：
+
+```bash
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
+  "read_governance": ["control-plane-admin", "release-manager", "ops-oncall"],
+  "open_incident": ["control-plane-admin", "incident-commander", "ops-oncall"],
+  "transition_incident": ["control-plane-admin", "incident-commander"]
+}'
+```
 
 ## 路由清单
 
@@ -53,6 +70,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 ```bash
 curl \
   -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/governance-summary
 ```
 
@@ -62,6 +81,8 @@ curl \
 curl \
   -X POST \
   -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: incident-commander-1" \
+  -H "X-Control-Plane-Role: incident-commander" \
   -H "Idempotency-Key: incident-open-20260410-001" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/incidents/open \
@@ -82,6 +103,8 @@ curl \
 curl \
   -X POST \
   -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: incident-commander-1" \
+  -H "X-Control-Plane-Role: incident-commander" \
   -H "Idempotency-Key: incident-transition-20260410-001" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/incidents/incident-20260410abcd1234/transition \
@@ -100,7 +123,7 @@ curl \
 - 读模型优先服务治理、审阅和值班流程
 - 当前写接口只覆盖 incident 创建与状态推进
 - 存储仍然是本地 artifact JSON，而不是外部数据库
-- 权限还是 token 级别，还没有做到 role-aware policy enforcement
+- 权限现在已经是 token + route-level role policy，但还不是完整统一的 RBAC / policy engine
 - 现在已经有幂等和审计，但还没有后台队列、分布式锁和更强的一致性协调
 
 这意味着它已经足够像一套内部生产治理服务，可以支撑本地演练和内部工具接入，同时仍然保持依赖轻、容易测试。

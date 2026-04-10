@@ -190,6 +190,8 @@ Use `run-control-plane-server` to expose the same governance layer over HTTP for
 Control-plane bind settings come from `AGENT_ARCHITECT_LAB_CONTROL_PLANE_HOST` and `AGENT_ARCHITECT_LAB_CONTROL_PLANE_PORT`, which default to `127.0.0.1` and `8080`.
 Read routes can be protected with `AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN`.
 State-changing routes require `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN`; if it is unset, write routes return `503`.
+Protected control-plane routes also require `X-Control-Plane-Actor` and `X-Control-Plane-Role` headers when the route has an active role policy.
+Role policies come from `AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES`, which defaults to separate permissions for governance reads, incident opening, and incident transitions.
 State-changing routes also require an `Idempotency-Key` header. The first successful mutation response is stored and replayed for safe retries.
 Control-plane mutation audits are written under `artifacts/control-plane/mutation-requests.jsonl`, and idempotency state is stored under `artifacts/control-plane/idempotency-registry.json`.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.

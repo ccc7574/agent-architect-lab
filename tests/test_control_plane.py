@@ -50,11 +50,27 @@ def _auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _mutation_headers(token: str, idempotency_key: str) -> dict[str, str]:
+def _identity_headers(actor: str, role: str) -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {token}",
-        "Idempotency-Key": idempotency_key,
+        "X-Control-Plane-Actor": actor,
+        "X-Control-Plane-Role": role,
     }
+
+
+def _request_headers(
+    token: str,
+    *,
+    actor: str,
+    role: str,
+    idempotency_key: str | None = None,
+) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        **_identity_headers(actor, role),
+    }
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    return headers
 
 
 def test_control_plane_app_requires_read_token_for_governance_routes(monkeypatch, tmp_path: Path) -> None:
@@ -68,7 +84,12 @@ def test_control_plane_app_requires_read_token_for_governance_routes(monkeypatch
         ),
     )
 
-    unauthorized = app.handle_request("GET", "/governance-summary", {}, b"")
+    unauthorized = app.handle_request(
+        "GET",
+        "/governance-summary",
+        _identity_headers("dashboard-user", "release-manager"),
+        b"",
+    )
     authorized = app.handle_request("GET", "/health", {}, b"")
 
     assert unauthorized.status_code == 401
@@ -91,7 +112,12 @@ def test_control_plane_app_disables_mutation_routes_without_mutation_token(monke
     response = app.handle_request(
         "POST",
         "/incidents/open",
-        _mutation_headers("reader-token", "open-incident-1"),
+        _request_headers(
+            "reader-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="open-incident-1",
+        ),
         json.dumps(
             {
                 "severity": "high",
@@ -103,6 +129,61 @@ def test_control_plane_app_disables_mutation_routes_without_mutation_token(monke
 
     assert response.status_code == 503
     assert response.payload["error"]["code"] == "mutation_token_not_configured"
+
+
+def test_control_plane_app_requires_identity_for_governance_routes(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    app = ControlPlaneApp(
+        settings=settings,
+        auth=ControlPlaneAuth(
+            read_token=settings.control_plane_read_token,
+            mutation_token=settings.control_plane_mutation_token,
+        ),
+    )
+
+    response = app.handle_request(
+        "GET",
+        "/governance-summary",
+        _auth_header("reader-token"),
+        b"",
+    )
+
+    assert response.status_code == 400
+    assert response.payload["error"]["code"] == "missing_identity"
+
+
+def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    app = ControlPlaneApp(
+        settings=settings,
+        auth=ControlPlaneAuth(
+            read_token=settings.control_plane_read_token,
+            mutation_token=settings.control_plane_mutation_token,
+        ),
+    )
+
+    response = app.handle_request(
+        "POST",
+        "/incidents/open",
+        _request_headers(
+            "writer-token",
+            actor="qa-owner-1",
+            role="qa-owner",
+            idempotency_key="open-incident-1",
+        ),
+        json.dumps(
+            {
+                "severity": "high",
+                "summary": "staging rollback triggered",
+                "owner": "incident-commander",
+            }
+        ).encode("utf-8"),
+    )
+
+    assert response.status_code == 403
+    assert response.payload["error"]["code"] == "forbidden_role"
 
 
 def test_control_plane_app_requires_idempotency_key_for_mutations(monkeypatch, tmp_path: Path) -> None:
@@ -119,7 +200,11 @@ def test_control_plane_app_requires_idempotency_key_for_mutations(monkeypatch, t
     response = app.handle_request(
         "POST",
         "/incidents/open",
-        _auth_header("writer-token"),
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+        ),
         json.dumps(
             {
                 "severity": "high",
@@ -150,7 +235,12 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     opened = app.handle_request(
         "POST",
         "/incidents/open",
-        _mutation_headers("writer-token", "open-incident-1"),
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="open-incident-1",
+        ),
         json.dumps(
             {
                 "severity": "high",
@@ -164,7 +254,12 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     replayed = app.handle_request(
         "POST",
         "/incidents/open",
-        _mutation_headers("writer-token", "open-incident-1"),
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="open-incident-1",
+        ),
         json.dumps(
             {
                 "severity": "high",
@@ -178,7 +273,12 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     transitioned = app.handle_request(
         "POST",
         f"/incidents/{opened.payload['incident_id']}/transition",
-        _mutation_headers("writer-token", "transition-incident-1"),
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="transition-incident-1",
+        ),
         json.dumps(
             {
                 "status": "acknowledged",
@@ -206,6 +306,9 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     assert audit_rows[1]["replayed"] is True
     assert audit_rows[1]["operation_id"] == audit_rows[0]["operation_id"]
     assert audit_rows[0]["token_fingerprint"] is not None
+    assert audit_rows[0]["actor"] == "incident-commander-1"
+    assert audit_rows[0]["role"] == "incident-commander"
+    assert audit_rows[0]["token_scope"] == "mutation"
 
 
 def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tmp_path: Path) -> None:
@@ -222,7 +325,12 @@ def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tm
     first = app.handle_request(
         "POST",
         "/incidents/open",
-        _mutation_headers("writer-token", "open-incident-1"),
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="open-incident-1",
+        ),
         json.dumps(
             {
                 "severity": "high",
@@ -234,7 +342,12 @@ def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tm
     conflicting = app.handle_request(
         "POST",
         "/incidents/open",
-        _mutation_headers("writer-token", "open-incident-1"),
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="open-incident-1",
+        ),
         json.dumps(
             {
                 "severity": "critical",
@@ -265,7 +378,15 @@ def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, t
         health_response = connection.getresponse()
         health_payload = json.loads(health_response.read().decode("utf-8"))
 
-        connection.request("GET", "/release-risk-board?limit=5", headers=_auth_header("reader-token"))
+        connection.request(
+            "GET",
+            "/release-risk-board?limit=5",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
         risk_response = connection.getresponse()
         risk_payload = json.loads(risk_response.read().decode("utf-8"))
 
@@ -282,7 +403,12 @@ def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, t
             ),
             headers={
                 "Content-Type": "application/json",
-                **_mutation_headers("writer-token", "smoke-open-incident-1"),
+                **_request_headers(
+                    "writer-token",
+                    actor="incident-commander-1",
+                    role="incident-commander",
+                    idempotency_key="smoke-open-incident-1",
+                ),
             },
         )
         incident_response = connection.getresponse()

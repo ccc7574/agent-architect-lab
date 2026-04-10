@@ -132,6 +132,13 @@ class ControlPlaneResponse:
 
 
 @dataclass(slots=True)
+class AuthorizationContext:
+    token_scope: str
+    actor: str | None = None
+    role: str | None = None
+
+
+@dataclass(slots=True)
 class IdempotencyRecord:
     idempotency_key: str
     method: str
@@ -206,29 +213,33 @@ class ControlPlaneAuth:
     read_token: str | None = None
     mutation_token: str | None = None
 
-    def authorize(self, scope: str, headers: Mapping[str, str]) -> ControlPlaneResponse | None:
+    def authenticate(
+        self,
+        scope: str,
+        headers: Mapping[str, str],
+    ) -> tuple[str | None, ControlPlaneResponse | None]:
         if scope == "public":
-            return None
-        header_value = headers.get("Authorization", "")
+            return "public", None
+        header_value = _header_value(headers, "Authorization") or ""
         token = _extract_bearer_token(header_value)
         if scope == "read":
             valid_tokens = {candidate for candidate in (self.read_token, self.mutation_token) if candidate}
             if not valid_tokens:
-                return None
+                return "anonymous", None
             if token in valid_tokens:
-                return None
-            return _error_response(401, "unauthorized", "A valid bearer token is required for read access.")
+                return ("mutation" if token == self.mutation_token else "read"), None
+            return None, _error_response(401, "unauthorized", "A valid bearer token is required for read access.")
         if scope == "write":
             if not self.mutation_token:
-                return _error_response(
+                return None, _error_response(
                     503,
                     "mutation_token_not_configured",
                     "Mutation routes are disabled until AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN is configured.",
                 )
             if token == self.mutation_token:
-                return None
-            return _error_response(401, "unauthorized", "A valid mutation bearer token is required.")
-        return _error_response(500, "invalid_scope", f"Unknown auth scope '{scope}'.")
+                return "mutation", None
+            return None, _error_response(401, "unauthorized", "A valid mutation bearer token is required.")
+        return None, _error_response(500, "invalid_scope", f"Unknown auth scope '{scope}'.")
 
 
 @dataclass(slots=True)
@@ -262,7 +273,11 @@ class ControlPlaneApp:
                     },
                 )
             if method == "GET" and path == "/release-risk-board":
-                auth_error = self.auth.authorize("read", headers)
+                authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_governance",
+                    headers=headers,
+                )
                 if auth_error is not None:
                     return auth_error
                 environments = _query_environments(query, self.settings)
@@ -280,7 +295,11 @@ class ControlPlaneApp:
                 ).to_dict()
                 return ControlPlaneResponse(200, payload)
             if method == "GET" and path == "/approval-review-board":
-                auth_error = self.auth.authorize("read", headers)
+                authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_governance",
+                    headers=headers,
+                )
                 if auth_error is not None:
                     return auth_error
                 environments = _query_environments(query, self.settings)
@@ -297,7 +316,11 @@ class ControlPlaneApp:
                 ).to_dict()
                 return ControlPlaneResponse(200, payload)
             if method == "GET" and path == "/incident-review-board":
-                auth_error = self.auth.authorize("read", headers)
+                authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_governance",
+                    headers=headers,
+                )
                 if auth_error is not None:
                     return auth_error
                 status = _query_optional_string(
@@ -314,7 +337,11 @@ class ControlPlaneApp:
                 ).to_dict()
                 return ControlPlaneResponse(200, payload)
             if method == "GET" and path == "/governance-summary":
-                auth_error = self.auth.authorize("read", headers)
+                authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_governance",
+                    headers=headers,
+                )
                 if auth_error is not None:
                     return auth_error
                 payload = build_governance_summary_payload(
@@ -326,10 +353,15 @@ class ControlPlaneApp:
                 )
                 return ControlPlaneResponse(200, payload)
             if method == "POST" and path == "/incidents/open":
-                auth_error = self.auth.authorize("write", headers)
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="open_incident",
+                    headers=headers,
+                )
                 if auth_error is not None:
                     return auth_error
                 return self._execute_mutation(
+                    authorization=authorization,
                     method=method,
                     path=path,
                     headers=headers,
@@ -348,10 +380,15 @@ class ControlPlaneApp:
                 )
             transition_match = re.fullmatch(r"/incidents/([^/]+)/transition", path)
             if method == "POST" and transition_match is not None:
-                auth_error = self.auth.authorize("write", headers)
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="transition_incident",
+                    headers=headers,
+                )
                 if auth_error is not None:
                     return auth_error
                 return self._execute_mutation(
+                    authorization=authorization,
                     method=method,
                     path=path,
                     headers=headers,
@@ -375,9 +412,40 @@ class ControlPlaneApp:
         except ValueError as exc:
             return _error_response(400, "invalid_request", str(exc))
 
+    def _authorize_route(
+        self,
+        *,
+        scope: str,
+        route_policy_key: str,
+        headers: Mapping[str, str],
+    ) -> tuple[AuthorizationContext | None, ControlPlaneResponse | None]:
+        token_scope, auth_error = self.auth.authenticate(scope, headers)
+        if auth_error is not None:
+            return None, auth_error
+        allowed_roles = self.settings.control_plane_role_policies.get(route_policy_key, [])
+        identity = _identity_context(headers)
+        if allowed_roles:
+            if identity is None:
+                return None, _error_response(
+                    400,
+                    "missing_identity",
+                    "Headers 'X-Control-Plane-Actor' and 'X-Control-Plane-Role' are required for this route.",
+                )
+            if identity.role not in allowed_roles:
+                return None, _error_response(
+                    403,
+                    "forbidden_role",
+                    f"Role '{identity.role}' is not permitted for route policy '{route_policy_key}'.",
+                )
+            return AuthorizationContext(token_scope=token_scope or scope, actor=identity.actor, role=identity.role), None
+        if identity is not None:
+            return AuthorizationContext(token_scope=token_scope or scope, actor=identity.actor, role=identity.role), None
+        return AuthorizationContext(token_scope=token_scope or scope), None
+
     def _execute_mutation(
         self,
         *,
+        authorization: AuthorizationContext | None,
         method: str,
         path: str,
         headers: Mapping[str, str],
@@ -400,14 +468,15 @@ class ControlPlaneApp:
                     method=method,
                     path=path,
                     headers=headers,
-                    body=body,
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=request_fingerprint,
-                    response=response,
-                    operation_id=existing.operation_id,
-                    replayed=False,
-                    conflict=True,
-                )
+                body=body,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+                response=response,
+                operation_id=existing.operation_id,
+                authorization=authorization,
+                replayed=False,
+                conflict=True,
+            )
                 return response
             response = self._build_mutation_response(
                 status_code=existing.status_code,
@@ -426,6 +495,7 @@ class ControlPlaneApp:
                 request_fingerprint=request_fingerprint,
                 response=response,
                 operation_id=existing.operation_id,
+                authorization=authorization,
                 replayed=True,
                 conflict=False,
             )
@@ -465,6 +535,7 @@ class ControlPlaneApp:
             request_fingerprint=request_fingerprint,
             response=response,
             operation_id=operation_id,
+            authorization=authorization,
             replayed=False,
             conflict=False,
         )
@@ -507,6 +578,7 @@ class ControlPlaneApp:
         request_fingerprint: str,
         response: ControlPlaneResponse,
         operation_id: str,
+        authorization: AuthorizationContext | None,
         replayed: bool,
         conflict: bool,
     ) -> None:
@@ -519,7 +591,10 @@ class ControlPlaneApp:
             "path": path,
             "idempotency_key": idempotency_key,
             "request_fingerprint": request_fingerprint,
-            "token_fingerprint": _token_fingerprint(headers.get("Authorization", "")),
+            "token_scope": authorization.token_scope if authorization is not None else None,
+            "token_fingerprint": _token_fingerprint(_header_value(headers, "Authorization") or ""),
+            "actor": authorization.actor if authorization is not None else None,
+            "role": authorization.role if authorization is not None else None,
             "request_body": _audit_request_body(body),
             "status_code": response.status_code,
             "response_payload": response.payload,
@@ -601,6 +676,14 @@ def _error_response(status_code: int, code: str, message: str) -> ControlPlaneRe
     )
 
 
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    target = name.lower()
+    for key, value in headers.items():
+        if key.lower() == target:
+            return value
+    return None
+
+
 def _extract_bearer_token(header_value: str) -> str | None:
     parts = header_value.strip().split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer":
@@ -609,13 +692,28 @@ def _extract_bearer_token(header_value: str) -> str | None:
     return token or None
 
 
+@dataclass(slots=True)
+class IdentityContext:
+    actor: str
+    role: str
+
+
+def _identity_context(headers: Mapping[str, str]) -> IdentityContext | None:
+    actor = (_header_value(headers, "X-Control-Plane-Actor") or "").strip()
+    role = (_header_value(headers, "X-Control-Plane-Role") or "").strip()
+    if not actor and not role:
+        return None
+    if not actor or not role:
+        raise ValueError(
+            "Headers 'X-Control-Plane-Actor' and 'X-Control-Plane-Role' must be supplied together."
+        )
+    return IdentityContext(actor=actor, role=role)
+
+
 def _required_idempotency_key(headers: Mapping[str, str]) -> str:
-    for key, value in headers.items():
-        if key.lower() == "idempotency-key":
-            candidate = value.strip()
-            if candidate:
-                return candidate
-            break
+    candidate = (_header_value(headers, "Idempotency-Key") or "").strip()
+    if candidate:
+        return candidate
     raise ValueError("Header 'Idempotency-Key' is required for mutation routes.")
 
 

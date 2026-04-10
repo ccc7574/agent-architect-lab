@@ -31,6 +31,7 @@ class Settings:
     control_plane_port: int
     control_plane_read_token: str | None
     control_plane_mutation_token: str | None
+    control_plane_role_policies: dict[str, list[str]]
     planner_provider: str
     planner_model: str
     planner_api_base: str | None
@@ -51,6 +52,12 @@ class Settings:
 def _default_artifacts_dir(project_root: Path) -> Path:
     digest = hashlib.sha1(str(project_root).encode("utf-8")).hexdigest()[:8]
     return Path(gettempdir()) / "agent-architect-lab" / f"{project_root.name}-{digest}"
+
+
+def _normalize_role_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 
 def load_settings() -> Settings:
@@ -79,6 +86,38 @@ def load_settings() -> Settings:
     control_plane_port = int(os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_PORT", "8080"))
     control_plane_read_token = os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN") or None
     control_plane_mutation_token = os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN") or None
+    raw_control_plane_role_policies = json.loads(
+        os.environ.get(
+            "AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES",
+            json.dumps(
+                {
+                    "read_governance": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                        "qa-owner",
+                    ],
+                    "open_incident": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                    ],
+                    "transition_incident": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                    ],
+                }
+            ),
+        )
+    )
+    control_plane_role_policies = {
+        str(route_key): _normalize_role_list(roles)
+        for route_key, roles in raw_control_plane_role_policies.items()
+    }
     planner_provider = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_PROVIDER", "heuristic").strip().lower()
     planner_model = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_MODEL", "gpt-4.1-mini")
     planner_api_base = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_API_BASE")
@@ -196,6 +235,7 @@ def load_settings() -> Settings:
         control_plane_port=control_plane_port,
         control_plane_read_token=control_plane_read_token,
         control_plane_mutation_token=control_plane_mutation_token,
+        control_plane_role_policies=control_plane_role_policies,
         planner_provider=planner_provider,
         planner_model=planner_model,
         planner_api_base=planner_api_base,
