@@ -12,6 +12,10 @@ from agent_architect_lab.control_plane.storage import AuditEvent, IdempotencyRec
 from agent_architect_lab.models import utc_now_iso
 
 
+CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 2
+_SCHEMA_NAME = "control_plane"
+
+
 class SQLiteRepositoryMixin:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -24,6 +28,32 @@ class SQLiteRepositoryMixin:
         return connection
 
 
+def get_sqlite_schema_version(path: Path) -> int:
+    if not path.exists():
+        return 0
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    try:
+        _ensure_schema_meta_table(connection)
+        row = connection.execute(
+            "SELECT schema_version FROM control_plane_schema_meta WHERE schema_name = ?",
+            (_SCHEMA_NAME,),
+        ).fetchone()
+        return int(row["schema_version"]) if row is not None else _infer_legacy_schema_version(connection)
+    finally:
+        connection.close()
+
+
+def ensure_sqlite_control_plane_schema(path: Path) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    try:
+        return _ensure_sqlite_control_plane_schema(connection)
+    finally:
+        connection.close()
+
+
 class SQLiteIdempotencyRepository(SQLiteRepositoryMixin):
     def __init__(self, path: Path) -> None:
         super().__init__(path)
@@ -32,26 +62,7 @@ class SQLiteIdempotencyRepository(SQLiteRepositoryMixin):
     def _initialize(self) -> None:
         with self._lock:
             with self._connect() as connection:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS idempotency_records (
-                        idempotency_key TEXT PRIMARY KEY,
-                        method TEXT NOT NULL,
-                        path TEXT NOT NULL,
-                        request_fingerprint TEXT NOT NULL,
-                        operation_id TEXT NOT NULL,
-                        committed_at TEXT NOT NULL,
-                        status_code INTEGER NOT NULL,
-                        response_payload TEXT NOT NULL
-                    )
-                    """
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_idempotency_committed_at ON idempotency_records (committed_at DESC, idempotency_key DESC)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_idempotency_operation_id ON idempotency_records (operation_id)"
-                )
+                _ensure_sqlite_control_plane_schema(connection)
 
     def get(self, idempotency_key: str) -> IdempotencyRecord | None:
         with self._lock:
@@ -132,38 +143,7 @@ class SQLiteAuditLogRepository(SQLiteRepositoryMixin):
     def _initialize(self) -> None:
         with self._lock:
             with self._connect() as connection:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS audit_events (
-                        audit_event_id TEXT PRIMARY KEY,
-                        occurred_at TEXT NOT NULL,
-                        request_id TEXT,
-                        operation_id TEXT,
-                        event_type TEXT,
-                        error_code TEXT,
-                        actor TEXT,
-                        role TEXT,
-                        method TEXT,
-                        path TEXT,
-                        status_code INTEGER,
-                        replayed INTEGER NOT NULL DEFAULT 0,
-                        conflict INTEGER NOT NULL DEFAULT 0,
-                        payload TEXT NOT NULL
-                    )
-                    """
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_audit_occurred_at ON audit_events (occurred_at DESC, audit_event_id DESC)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_audit_request_id ON audit_events (request_id)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_audit_operation_id ON audit_events (operation_id)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events (event_type, error_code)"
-                )
+                _ensure_sqlite_control_plane_schema(connection)
 
     def append(self, payload: dict[str, Any]) -> None:
         event = dict(payload)
@@ -179,6 +159,7 @@ class SQLiteAuditLogRepository(SQLiteRepositoryMixin):
                         operation_id,
                         event_type,
                         error_code,
+                        route_policy_key,
                         actor,
                         role,
                         method,
@@ -187,7 +168,7 @@ class SQLiteAuditLogRepository(SQLiteRepositoryMixin):
                         replayed,
                         conflict,
                         payload
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         audit_event_id,
@@ -196,6 +177,7 @@ class SQLiteAuditLogRepository(SQLiteRepositoryMixin):
                         _optional_text(event.get("operation_id")),
                         _optional_text(event.get("event_type")),
                         _optional_text(event.get("error_code")),
+                        _optional_text(event.get("route_policy_key")),
                         _optional_text(event.get("actor")),
                         _optional_text(event.get("role")),
                         _optional_text(event.get("method")),
@@ -214,6 +196,7 @@ class SQLiteAuditLogRepository(SQLiteRepositoryMixin):
         operation_id: str | None = None,
         event_type: str | None = None,
         error_code: str | None = None,
+        route_policy_key: str | None = None,
         actor: str | None = None,
         role: str | None = None,
         path: str | None = None,
@@ -230,6 +213,7 @@ class SQLiteAuditLogRepository(SQLiteRepositoryMixin):
             ("operation_id", operation_id),
             ("event_type", event_type),
             ("error_code", error_code),
+            ("route_policy_key", route_policy_key),
             ("actor", actor),
             ("role", role),
             ("path", path),
@@ -265,39 +249,7 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
     def _initialize(self) -> None:
         with self._lock:
             with self._connect() as connection:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS control_plane_jobs (
-                        job_id TEXT PRIMARY KEY,
-                        job_type TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        requested_by_actor TEXT,
-                        requested_by_role TEXT,
-                        request_id TEXT,
-                        operation_id TEXT,
-                        attempts INTEGER NOT NULL,
-                        max_attempts INTEGER NOT NULL,
-                        queue_reason TEXT NOT NULL,
-                        input_payload TEXT NOT NULL,
-                        result_payload TEXT,
-                        error TEXT,
-                        last_error TEXT,
-                        started_at TEXT,
-                        completed_at TEXT
-                    )
-                    """
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON control_plane_jobs (status, created_at ASC, job_id ASC)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_jobs_request_id ON control_plane_jobs (request_id)"
-                )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_jobs_operation_id ON control_plane_jobs (operation_id)"
-                )
+                _ensure_sqlite_control_plane_schema(connection)
 
     def create_job(
         self,
@@ -512,6 +464,202 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                     (job_id,),
                 ).fetchone()
         return _job_from_row(updated)
+
+
+def _ensure_sqlite_control_plane_schema(connection: sqlite3.Connection) -> int:
+    _ensure_schema_meta_table(connection)
+    current_version = _current_schema_version(connection)
+    if current_version == 0 and _has_legacy_tables(connection):
+        current_version = _infer_legacy_schema_version(connection)
+        _write_schema_version(connection, current_version)
+    while current_version < CONTROL_PLANE_SQLITE_SCHEMA_VERSION:
+        next_version = current_version + 1
+        if next_version == 1:
+            _apply_schema_v1(connection)
+        elif next_version == 2:
+            _apply_schema_v2(connection)
+        else:  # pragma: no cover - defensive future guard
+            raise ValueError(f"Unsupported SQLite schema migration target: {next_version}")
+        _write_schema_version(connection, next_version)
+        current_version = next_version
+    return current_version
+
+
+def _ensure_schema_meta_table(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS control_plane_schema_meta (
+            schema_name TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _current_schema_version(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "SELECT schema_version FROM control_plane_schema_meta WHERE schema_name = ?",
+        (_SCHEMA_NAME,),
+    ).fetchone()
+    return int(row["schema_version"]) if row is not None else 0
+
+
+def _write_schema_version(connection: sqlite3.Connection, version: int) -> None:
+    connection.execute(
+        """
+        INSERT OR REPLACE INTO control_plane_schema_meta (
+            schema_name,
+            schema_version,
+            updated_at
+        ) VALUES (?, ?, ?)
+        """,
+        (_SCHEMA_NAME, version, utc_now_iso()),
+    )
+
+
+def _has_legacy_tables(connection: sqlite3.Connection) -> bool:
+    return any(
+        _has_table(connection, table_name)
+        for table_name in ("idempotency_records", "audit_events", "control_plane_jobs")
+    )
+
+
+def _infer_legacy_schema_version(connection: sqlite3.Connection) -> int:
+    if _has_column(connection, "audit_events", "route_policy_key"):
+        return 2
+    if _has_legacy_tables(connection):
+        return 1
+    return 0
+
+
+def _apply_schema_v1(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS idempotency_records (
+            idempotency_key TEXT PRIMARY KEY,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            committed_at TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            response_payload TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_events (
+            audit_event_id TEXT PRIMARY KEY,
+            occurred_at TEXT NOT NULL,
+            request_id TEXT,
+            operation_id TEXT,
+            event_type TEXT,
+            error_code TEXT,
+            actor TEXT,
+            role TEXT,
+            method TEXT,
+            path TEXT,
+            status_code INTEGER,
+            replayed INTEGER NOT NULL DEFAULT 0,
+            conflict INTEGER NOT NULL DEFAULT 0,
+            payload TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS control_plane_jobs (
+            job_id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            requested_by_actor TEXT,
+            requested_by_role TEXT,
+            request_id TEXT,
+            operation_id TEXT,
+            attempts INTEGER NOT NULL,
+            max_attempts INTEGER NOT NULL,
+            queue_reason TEXT NOT NULL,
+            input_payload TEXT NOT NULL,
+            result_payload TEXT,
+            error TEXT,
+            last_error TEXT,
+            started_at TEXT,
+            completed_at TEXT
+        )
+        """
+    )
+    _ensure_v1_indexes(connection)
+
+
+def _apply_schema_v2(connection: sqlite3.Connection) -> None:
+    _apply_schema_v1(connection)
+    if not _has_column(connection, "audit_events", "route_policy_key"):
+        connection.execute("ALTER TABLE audit_events ADD COLUMN route_policy_key TEXT")
+        rows = connection.execute(
+            "SELECT audit_event_id, payload FROM audit_events WHERE route_policy_key IS NULL"
+        ).fetchall()
+        for row in rows:
+            payload = _json_dict(row["payload"]) or {}
+            connection.execute(
+                "UPDATE audit_events SET route_policy_key = ? WHERE audit_event_id = ?",
+                (_optional_text(payload.get("route_policy_key")), str(row["audit_event_id"])),
+            )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_audit_route_policy_key ON audit_events (route_policy_key, event_type, error_code)"
+    )
+    _ensure_v1_indexes(connection)
+
+
+def _ensure_v1_indexes(connection: sqlite3.Connection) -> None:
+    if _has_table(connection, "idempotency_records"):
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_idempotency_committed_at ON idempotency_records (committed_at DESC, idempotency_key DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_idempotency_operation_id ON idempotency_records (operation_id)"
+        )
+    if _has_table(connection, "audit_events"):
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_occurred_at ON audit_events (occurred_at DESC, audit_event_id DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_request_id ON audit_events (request_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_operation_id ON audit_events (operation_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events (event_type, error_code)"
+        )
+    if _has_table(connection, "control_plane_jobs"):
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON control_plane_jobs (status, created_at ASC, job_id ASC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_request_id ON control_plane_jobs (request_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_operation_id ON control_plane_jobs (operation_id)"
+        )
+
+
+def _has_table(connection: sqlite3.Connection, table_name: str) -> bool:
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _has_column(connection: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    if not _has_table(connection, table_name):
+        return False
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row["name"]) == column_name for row in rows)
 
 
 def _insert_job(connection: sqlite3.Connection, job: ControlPlaneJob) -> None:

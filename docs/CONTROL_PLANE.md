@@ -33,6 +33,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_STORAGE_BACKEND=sqlite
 export AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH=/tmp/agent-architect-lab-control-plane.sqlite3
 ```
 
+SQLite schema migrations run automatically on startup. The `/health` response exposes the active storage backend and SQLite schema version.
+
 ## Authentication
 
 - `GET /health` is public
@@ -87,7 +89,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
-- `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
+- `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&route_policy_key=read_governance&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
 - `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`
 

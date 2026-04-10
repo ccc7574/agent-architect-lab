@@ -21,6 +21,7 @@ from agent_architect_lab.control_plane.repositories import (
     create_local_control_plane_repositories,
 )
 from agent_architect_lab.control_plane.reporting import build_governance_summary_payload
+from agent_architect_lab.control_plane.sqlite_repositories import get_sqlite_schema_version
 from agent_architect_lab.control_plane.storage import (
     AuditLogRepository,
     IdempotencyRecord,
@@ -128,6 +129,19 @@ class ControlPlaneApp:
                         "auth": {
                             "read_token_configured": bool(self.auth.read_token),
                             "mutation_token_configured": bool(self.auth.mutation_token),
+                        },
+                        "storage": {
+                            "backend": self.settings.control_plane_storage_backend,
+                            "sqlite_path": (
+                                str(self.settings.control_plane_sqlite_path)
+                                if self.settings.control_plane_storage_backend == "sqlite"
+                                else None
+                            ),
+                            "schema_version": (
+                                get_sqlite_schema_version(self.settings.control_plane_sqlite_path)
+                                if self.settings.control_plane_storage_backend == "sqlite"
+                                else None
+                            ),
                         },
                     },
                 ))
@@ -268,6 +282,7 @@ class ControlPlaneApp:
                         operation_id=operation_id_filter,
                         event_type=_query_optional_string(query, "event_type"),
                         error_code=_query_optional_string(query, "error_code"),
+                        route_policy_key=_query_optional_string(query, "route_policy_key"),
                         actor=_query_optional_string(query, "actor"),
                         role=_query_optional_string(query, "role"),
                         path=_query_optional_string(query, "path"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import sqlite3
 import threading
 import time
 from contextlib import redirect_stdout
@@ -19,6 +20,7 @@ from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, Control
 from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.control_plane.reporting import record_operator_handoff_snapshot
 from agent_architect_lab.control_plane.server import ControlPlaneApp, build_control_plane_app, create_control_plane_server
+from agent_architect_lab.control_plane.sqlite_repositories import get_sqlite_schema_version
 
 
 def _configure_env(
@@ -861,6 +863,9 @@ def test_control_plane_server_supports_sqlite_backend(monkeypatch, tmp_path: Pat
         create_response = connection.getresponse()
         create_payload = json.loads(create_response.read().decode("utf-8"))
         job_id = create_payload["job_id"]
+        connection.request("GET", "/health")
+        health_response = connection.getresponse()
+        health_payload = json.loads(health_response.read().decode("utf-8"))
 
         final_payload = None
         for _ in range(50):
@@ -909,6 +914,9 @@ def test_control_plane_server_supports_sqlite_backend(monkeypatch, tmp_path: Pat
         assert settings.control_plane_storage_backend == "sqlite"
         assert settings.control_plane_sqlite_path.exists()
         assert create_response.status == 202
+        assert health_response.status == 200
+        assert health_payload["storage"]["backend"] == "sqlite"
+        assert health_payload["storage"]["schema_version"] == 2
         assert final_payload is not None
         assert final_payload["status"] == "succeeded"
         assert Path(final_payload["result_payload"]["saved_to"]).exists()
@@ -922,3 +930,98 @@ def test_control_plane_server_supports_sqlite_backend(monkeypatch, tmp_path: Pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_sqlite_control_plane_repositories_migrate_legacy_schema(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    settings = load_settings()
+    sqlite_path = settings.control_plane_sqlite_path
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+
+    connection = sqlite3.connect(sqlite_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE audit_events (
+                audit_event_id TEXT PRIMARY KEY,
+                occurred_at TEXT NOT NULL,
+                request_id TEXT,
+                operation_id TEXT,
+                event_type TEXT,
+                error_code TEXT,
+                actor TEXT,
+                role TEXT,
+                method TEXT,
+                path TEXT,
+                status_code INTEGER,
+                replayed INTEGER NOT NULL DEFAULT 0,
+                conflict INTEGER NOT NULL DEFAULT 0,
+                payload TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO audit_events (
+                audit_event_id,
+                occurred_at,
+                request_id,
+                operation_id,
+                event_type,
+                error_code,
+                actor,
+                role,
+                method,
+                path,
+                status_code,
+                replayed,
+                conflict,
+                payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "audit-legacy-1",
+                "2026-04-10T00:00:00Z",
+                "req-legacy-1",
+                None,
+                "authorization_denied",
+                "missing_identity",
+                None,
+                None,
+                "GET",
+                "/governance-summary",
+                400,
+                0,
+                0,
+                json.dumps(
+                    {
+                        "audit_event_id": "audit-legacy-1",
+                        "event_type": "authorization_denied",
+                        "error_code": "missing_identity",
+                        "route_policy_key": "read_governance",
+                        "path": "/governance-summary",
+                        "method": "GET",
+                        "status_code": 400,
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert get_sqlite_schema_version(sqlite_path) == 1
+
+    repositories = create_local_control_plane_repositories(settings)
+    migrated_events = repositories.audit.list_events(
+        route_policy_key="read_governance",
+        event_type="authorization_denied",
+        error_code="missing_identity",
+        limit=5,
+    )
+
+    assert get_sqlite_schema_version(sqlite_path) == 2
+    assert migrated_events
+    assert migrated_events[0].payload["audit_event_id"] == "audit-legacy-1"
+    assert migrated_events[0].payload["route_policy_key"] == "read_governance"

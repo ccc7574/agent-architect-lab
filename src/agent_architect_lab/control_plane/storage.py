@@ -113,6 +113,7 @@ class AuditLogRepository(Protocol):
         operation_id: str | None = None,
         event_type: str | None = None,
         error_code: str | None = None,
+        route_policy_key: str | None = None,
         actor: str | None = None,
         role: str | None = None,
         path: str | None = None,
@@ -185,6 +186,7 @@ class JsonAuditLogRepository:
         operation_id: str | None = None,
         event_type: str | None = None,
         error_code: str | None = None,
+        route_policy_key: str | None = None,
         actor: str | None = None,
         role: str | None = None,
         path: str | None = None,
@@ -210,6 +212,8 @@ class JsonAuditLogRepository:
             rows = [row for row in rows if row.payload.get("event_type") == event_type]
         if error_code is not None:
             rows = [row for row in rows if row.payload.get("error_code") == error_code]
+        if route_policy_key is not None:
+            rows = [row for row in rows if row.payload.get("route_policy_key") == route_policy_key]
         if actor is not None:
             rows = [row for row in rows if row.payload.get("actor") == actor]
         if role is not None:
