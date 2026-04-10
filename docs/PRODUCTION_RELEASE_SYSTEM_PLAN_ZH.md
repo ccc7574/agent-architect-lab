@@ -7,14 +7,15 @@
 - release candidate 用不可变 manifest 保存，后续操作状态放在独立的 mutable ledger 中
 - deploy readiness 已经覆盖前置环境、soak time、required approver roles、freeze windows、override、rollback、environment lineage
 - 已经有面向值班的 release risk、approval backlog、override remediation、handoff history、incident queue 等看板
+- 现在已经有轻量 HTTP control plane，并且把 read / write 路由放在 bearer token 边界之后
 - 交接数据不仅能生成 JSON，还能留档、回看，并导出为 Markdown 报告
 - incident 到 eval backfill 的建议流已经存在，现在 incident 本身也有独立 ledger 和状态机
 - 与治理相关的 CLI 和核心路径已经有较完整的自动化测试覆盖
 
 ## 核心结论
 
-1. release governance 已经较强，但 control plane 仍然主要停留在 CLI 形态。
-   这对本地演练足够，但距离真实生产还缺 API/service 边界、权限分层和后台处理能力。
+1. 现在已经有 service 边界，但这层还比较窄。
+   仓库已经具备内部 HTTP surface，以及读写分离的 token 边界，但还缺更强的 role-aware policy、幂等请求语义和后台 worker。
 
 2. incident 管理已经落地，但 incident closure loop 还不够完整。
    现在可以记录 incident、推进状态、挂 follow-up eval 路径，但还没有形成完整的 incident artifact bundle。
@@ -33,6 +34,7 @@
 - override grant / review / active audit / revoke
 - release readiness digest + release risk board
 - approval review board
+- 轻量 HTTP control plane，支持治理读接口和 incident 写接口
 - operator handoff 生成、留档、历史浏览、Markdown 导出
 - incident ledger、incident 状态流转、incident review board
 - 中英文 operator 文档
@@ -55,13 +57,13 @@
 - 在 incident close 前检查是否挂上 follow-up eval
 - 增加给 incident 绑定已有 eval artifact 的 CLI 能力
 
-### Phase 3: Service-Grade Control Plane
+### Phase 3: 加固 Service-Grade Control Plane
 
-目标：从“本地 CLI 系统”升级到“更像内部服务”的形态。
+目标：把已经存在的内部服务边界继续加固成更像真实生产系统的控制面。
 
-- 提供轻量 HTTP 或 MCP control surface
-- 按 operator role 做读写边界和权限分层
-- 把 read-only dashboard 和 state-changing action 分开
+- 在 bearer token 之上继续补 role-aware policy enforcement
+- 给 state-changing request 增加幂等与审计 envelope
+- 给慢操作增加队列或后台 worker
 
 ### Phase 4: Runtime Realism
 
@@ -76,7 +78,7 @@
 1. 先补 incident / governance artifact bundle 导出
 2. 再把 incident close 条件和 follow-up eval 绑定做严
 3. 再补主管视角的摘要层
-4. 然后推进 control plane service 化
+4. 然后继续加固 control plane 的权限、请求语义和后台执行
 5. 最后加强 runtime realism
 
 ## 这个仓库何时算“对当前 scope 足够生产级”

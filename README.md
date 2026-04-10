@@ -7,6 +7,7 @@ The repository is intentionally small, but now includes:
 - A local agent runtime with deterministic planning
 - Workspace-scoped tools for files and shell commands
 - An MCP note server and adapter
+- A lightweight HTTP control plane with bearer-token-gated read and write routes
 - Multiple eval suites, release gates, and harness report comparison
 - Sample skill manifests wired into runtime selection and note-backed retrieval
 - Configurable planner providers with a deterministic default and model-backed scaffold
@@ -74,6 +75,9 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
+AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN=reader-token AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN=writer-token PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --host 127.0.0.1 --port 8080
+curl -H "Authorization: Bearer reader-token" http://127.0.0.1:8080/governance-summary
+curl -X POST http://127.0.0.1:8080/incidents/open -H "Authorization: Bearer writer-token" -H "Content-Type: application/json" -d '{"severity":"high","summary":"staging rollback triggered","owner":"incident-commander","environment":"staging"}'
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli environment-status --environment staging
 PYTHONPATH=src python3 -m agent_architect_lab.cli release-status 2026-04-10-main
@@ -140,6 +144,8 @@ More detail:
 - [docs/REPORT_REGISTRY.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/REPORT_REGISTRY.md)
 - [docs/RELEASE_LEDGER.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RELEASE_LEDGER.md)
 - [docs/RELEASE_LEDGER_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RELEASE_LEDGER_ZH.md)
+- [docs/CONTROL_PLANE.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/CONTROL_PLANE.md)
+- [docs/CONTROL_PLANE_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/CONTROL_PLANE_ZH.md)
 - [docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md)
 - [docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md)
 
@@ -180,6 +186,10 @@ Use `open-incident`, `transition-incident`, `list-incidents`, and `incident-revi
 Use `export-incident-report` to render one incident into a readable Markdown artifact for postmortems or stakeholder updates.
 Use `export-incident-bundle` to package the incident, linked release state, and related handoff artifacts into one export directory.
 Use `export-governance-summary` to generate a manager-facing Markdown summary across release risk, approval backlog, incident load, and override pressure.
+Use `run-control-plane-server` to expose the same governance layer over HTTP for internal dashboards or automation.
+Control-plane bind settings come from `AGENT_ARCHITECT_LAB_CONTROL_PLANE_HOST` and `AGENT_ARCHITECT_LAB_CONTROL_PLANE_PORT`, which default to `127.0.0.1` and `8080`.
+Read routes can be protected with `AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN`.
+State-changing routes require `AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN`; if it is unset, write routes return `503`.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, approval backlog, incident backlog, override remediation, active incidents, active overrides, and a summary line for the next operator.
@@ -202,12 +212,12 @@ The `openai_compatible` provider validates tool names and tool arguments against
 
 ## Current Product Direction
 
-The lab still uses a deterministic planner, which keeps it runnable without API keys. That is deliberate. The next serious step is not "add a bigger model", but "add better architecture boundaries":
+The lab still uses a deterministic planner by default, which keeps it runnable without API keys. That is deliberate. The next serious step is no longer the first control-plane boundary because that now exists; it is hardening the remaining production gaps:
 
 - LLM-backed planner providers
 - richer skill selection and policy routing
 - task types with stronger graders
-- multi-agent orchestration
-- production-style observability and rollback workflows
+- queued/background control-plane work and stronger role segmentation
+- model-backed validation and bounded multi-agent orchestration
 
 Those extensions are outlined in the docs.

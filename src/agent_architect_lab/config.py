@@ -24,6 +24,10 @@ class Settings:
     notes_dir: Path
     skills_dir: Path
     datasets_dir: Path
+    control_plane_host: str
+    control_plane_port: int
+    control_plane_read_token: str | None
+    control_plane_mutation_token: str | None
     planner_provider: str
     planner_model: str
     planner_api_base: str | None
@@ -65,6 +69,10 @@ def load_settings() -> Settings:
     notes_dir = project_root / "data" / "notes"
     skills_dir = project_root / "data" / "skills"
     datasets_dir = project_root / "src" / "agent_architect_lab" / "evals" / "datasets"
+    control_plane_host = os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    control_plane_port = int(os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_PORT", "8080"))
+    control_plane_read_token = os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN") or None
+    control_plane_mutation_token = os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN") or None
     planner_provider = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_PROVIDER", "heuristic").strip().lower()
     planner_model = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_MODEL", "gpt-4.1-mini")
     planner_api_base = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_API_BASE")
@@ -174,6 +182,10 @@ def load_settings() -> Settings:
         notes_dir=notes_dir,
         skills_dir=skills_dir,
         datasets_dir=datasets_dir,
+        control_plane_host=control_plane_host,
+        control_plane_port=control_plane_port,
+        control_plane_read_token=control_plane_read_token,
+        control_plane_mutation_token=control_plane_mutation_token,
         planner_provider=planner_provider,
         planner_model=planner_model,
         planner_api_base=planner_api_base,

@@ -9,6 +9,10 @@ from re import sub
 from agent_architect_lab.agent.patterns import PATTERNS, recommend_pattern
 from agent_architect_lab.agent.runtime import AgentRuntime
 from agent_architect_lab.config import load_settings
+from agent_architect_lab.control_plane.server import (
+    build_governance_summary_payload,
+    create_control_plane_server,
+)
 from agent_architect_lab.evals.tasks import list_available_suites, load_default_suite, load_suite
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
@@ -48,7 +52,7 @@ from agent_architect_lab.harness.reporting import HarnessReport, register_existi
 from agent_architect_lab.harness.rollout import build_rollout_review
 from agent_architect_lab.harness.runner import run_suite
 from agent_architect_lab.harness.shadow import run_shadow_suite
-from agent_architect_lab.mcp.server import serve
+from agent_architect_lab.mcp.server import serve as serve_mcp_server
 from agent_architect_lab.models import Task, utc_now_iso
 from agent_architect_lab.skills.catalog import load_skills, select_skills
 
@@ -72,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_eval.add_argument("--report-label", default="", help="Optional label stored in the report registry.")
 
     run_server = subparsers.add_parser("run-mcp-server", help="Run the example note MCP server.")
+    run_control_plane_server = subparsers.add_parser(
+        "run-control-plane-server",
+        help="Run the lightweight governance control-plane HTTP service.",
+    )
+    run_control_plane_server.add_argument("--host", default="", help="Optional bind host override.")
+    run_control_plane_server.add_argument("--port", type=int, default=None, help="Optional bind port override.")
 
     list_skills = subparsers.add_parser("list-skills", help="Show skill manifests and optional matches.")
     list_skills.add_argument("--goal", default="", help="Optional goal to test skill matching.")
@@ -536,7 +546,38 @@ def cmd_incident_review_board(status: str, limit: int) -> int:
 
 def cmd_run_mcp_server() -> int:
     settings = load_settings()
-    serve(settings.notes_dir)
+    serve_mcp_server(settings.notes_dir)
+    return 0
+
+
+def cmd_run_control_plane_server(host: str, port: int | None) -> int:
+    settings = load_settings()
+    server, app = create_control_plane_server(
+        settings=settings,
+        host=host or settings.control_plane_host,
+        port=port if port is not None else settings.control_plane_port,
+    )
+    bound_host, bound_port = server.server_address[:2]
+    print(
+        json.dumps(
+            {
+                "status": "listening",
+                "service": "agent-architect-lab-control-plane",
+                "host": bound_host,
+                "port": bound_port,
+                "read_token_configured": bool(app.auth.read_token),
+                "mutation_token_configured": bool(app.auth.mutation_token),
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
     return 0
 
 
@@ -1472,82 +1513,13 @@ def cmd_export_governance_summary(
     title: str,
 ) -> int:
     settings = load_settings()
-    selected_environments = environments or settings.environment_names
-    release_risk_board = get_release_risk_board(
-        environments=selected_environments,
-        ledger_path=settings.release_ledger_path,
-        production_soak_minutes=settings.production_soak_minutes,
-        required_approver_roles=settings.production_required_approver_roles,
-        environment_policies=settings.environment_policies,
-        environment_freeze_windows=settings.environment_freeze_windows,
-        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
-        release_stale_minutes=settings.release_stale_minutes,
-        limit=release_limit,
-    ).to_dict()
-    approval_review_board = get_approval_review_board(
-        environments=selected_environments,
-        ledger_path=settings.release_ledger_path,
-        production_soak_minutes=settings.production_soak_minutes,
-        required_approver_roles=settings.production_required_approver_roles,
-        environment_policies=settings.environment_policies,
-        environment_freeze_windows=settings.environment_freeze_windows,
-        approval_stale_minutes=settings.approval_stale_minutes,
-        limit=release_limit,
-    ).to_dict()
-    override_review_board = get_override_review_board(
-        ledger_path=settings.release_ledger_path,
-        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
-        limit=override_limit,
-    ).to_dict()
-    active_overrides = [
-        row.to_dict()
-        for row in list_active_overrides(
-            ledger_path=settings.release_ledger_path,
-            release_name=None,
-            environment=None,
-            limit=override_limit,
-        )
-    ]
-    incident_review_board = get_incident_review_board(
-        ledger_path=settings.incident_ledger_path,
-        stale_minutes=settings.incident_stale_minutes,
-        status=None,
-        limit=incident_limit,
-    ).to_dict()
-    active_incidents = [
-        row.to_dict()
-        for row in list_incidents(
-            ledger_path=settings.incident_ledger_path,
-            status=None,
-            severity=None,
-            limit=incident_limit,
-        )
-        if row.status not in {"resolved", "closed"}
-    ]
-    releases = [row.to_dict() for row in list_releases(ledger_path=settings.release_ledger_path)]
-    payload = {
-        "generated_at": json.loads(json.dumps({"timestamp": "placeholder"}))["timestamp"],
-        "environments": selected_environments,
-        "release_risk_board": release_risk_board,
-        "approval_review_board": approval_review_board,
-        "incident_review_board": incident_review_board,
-        "override_review_board": override_review_board,
-        "active_incidents": active_incidents,
-        "active_overrides": active_overrides,
-        "releases": releases,
-        "metrics": {
-            "recorded_release_count": len(releases),
-            "high_risk_release_count": len([row for row in release_risk_board.get("rows", []) if row.get("risk_level") == "high"]),
-            "stale_release_count": len([row for row in release_risk_board.get("rows", []) if row.get("is_stale")]),
-            "approval_backlog_count": len(approval_review_board.get("rows", [])),
-            "stale_approval_count": len([row for row in approval_review_board.get("rows", []) if row.get("is_stale")]),
-            "active_incident_count": len(active_incidents),
-            "critical_incident_count": len([row for row in active_incidents if row.get("severity") == "critical"]),
-            "active_override_count": len(active_overrides),
-            "urgent_override_count": len([row for row in override_review_board.get("rows", []) if row.get("status") in {"expired", "expiring_soon"}]),
-        },
-    }
-    payload["generated_at"] = utc_now_iso()
+    payload = build_governance_summary_payload(
+        settings,
+        environments=environments or settings.environment_names,
+        release_limit=release_limit,
+        incident_limit=incident_limit,
+        override_limit=override_limit,
+    )
     output_path = Path(output) if output else settings.reports_dir / "governance-summary.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report_title = title.strip() or "Release Governance Summary"
@@ -1614,6 +1586,8 @@ def main() -> int:
         return cmd_run_evals(args.report_name, args.suite, args.report_kind, args.report_label)
     if args.command == "run-mcp-server":
         return cmd_run_mcp_server()
+    if args.command == "run-control-plane-server":
+        return cmd_run_control_plane_server(args.host, args.port)
     if args.command == "list-skills":
         return cmd_list_skills(args.goal)
     if args.command == "explain-patterns":

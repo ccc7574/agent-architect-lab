@@ -7,14 +7,15 @@ This document reviews the current `agent-architect-lab` repository as if it were
 - Release candidates are preserved as immutable manifests while mutable operator state lives in a separate release ledger.
 - Deployment readiness already models predecessor environments, soak time, required approver roles, freeze windows, overrides, rollback, and environment lineage.
 - Operator-facing views now exist for release risk, approval backlog, override remediation, handoff history, and incident queues.
+- A lightweight HTTP control plane now exposes governance views and incident mutations behind bearer-token boundaries.
 - Shift handoff artifacts can be persisted, reloaded, and exported as Markdown reports.
 - Incident-to-eval suggestion flow exists and incidents can now be recorded, transitioned, and reviewed in a dedicated ledger.
 - The repository has broad automated coverage for the governance flows and command-line workflows.
 
 ## Findings
 
-1. Strong release governance exists, but the control plane is still CLI-centric rather than service-centric.
-   The current design is good for deterministic local operations, but a real production release system would eventually need an API/server boundary, access control, and background processing.
+1. A service boundary now exists, but it is still intentionally narrow.
+   The repo now has an internal HTTP surface plus token-gated read/write separation, but it still lacks stronger role-aware policy enforcement, idempotent job handling, and background workers.
 
 2. Incident management is now present, but not yet fully wired into eval automation.
    Incidents can store follow-up eval paths, but the system does not yet generate a complete “incident packet” that bundles report, release, handoff, and follow-up artifacts together.
@@ -33,6 +34,7 @@ This document reviews the current `agent-architect-lab` repository as if it were
 - Override grant, review, active audit, and revocation
 - Release readiness digest and release risk board
 - Approval review board
+- Lightweight HTTP control plane with read-only governance routes and incident mutation routes
 - Operator handoff generation, persistence, history, and Markdown export
 - Incident ledger, incident workflow transitions, and incident review board
 - English and Chinese operator documentation
@@ -55,13 +57,13 @@ Goal: turn incidents into a complete learning loop.
 - Track whether a resolved incident has a follow-up eval attached before closure
 - Add CLI helpers for linking an existing eval artifact to an incident
 
-### Phase 3: Service-Grade Control Plane
+### Phase 3: Harden The Service-Grade Control Plane
 
-Goal: reduce dependence on local-only CLI orchestration.
+Goal: move from a narrow internal service to a more production-shaped control plane.
 
-- Introduce a lightweight HTTP or MCP control surface for release and incident state
-- Add structured access-control boundaries for different operator roles
-- Separate read-only dashboards from state-changing commands
+- Add stronger role-aware policy enforcement on top of bearer tokens
+- Introduce idempotency and audit envelopes for state-changing requests
+- Add queued/background workers for slow release actions and report exports
 
 ### Phase 4: Runtime Realism
 
@@ -76,7 +78,7 @@ Goal: align the lab more closely with what senior AI architects must ship.
 1. Finish artifact bundle exports for incidents and governance summaries.
 2. Tighten incident closure rules so follow-up eval linkage becomes first-class.
 3. Add manager-facing summary outputs.
-4. Move the control plane toward a service boundary.
+4. Harden the control plane with stronger auth, request semantics, and background work.
 5. Expand runtime realism after the governance plane is stable.
 
 ## Definition Of “Production-Ready Enough” For This Repo
