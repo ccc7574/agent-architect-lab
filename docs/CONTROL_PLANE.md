@@ -45,6 +45,7 @@ Default role policy keys:
 - `read_governance`
 - `read_jobs`
 - `create_export_job`
+- `retry_job`
 - `approve_release`
 - `reject_release`
 - `promote_release`
@@ -76,8 +77,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
-- `GET /audit-events?request_id=req-...&operation_id=op-...&limit=100`
-- `GET /idempotency-records?limit=100`
+- `GET /audit-events?request_id=req-...&operation_id=op-...&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
+- `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`
 
 ### Mutation Routes
@@ -219,7 +220,7 @@ curl \
   -H "Authorization: Bearer reader-token" \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
-  "http://127.0.0.1:8080/audit-events?limit=20"
+  "http://127.0.0.1:8080/audit-events?actor=incident-commander-1&method=POST&path=/incidents/open&replayed=true&limit=20"
 ```
 
 Inspect a stored idempotent mutation:
@@ -230,6 +231,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/idempotency-records/export-governance-summary-001
+```
+
+List idempotent mutations for a specific route or operation:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  "http://127.0.0.1:8080/idempotency-records?method=POST&path=/jobs/export-governance-summary&status_code=202&limit=20"
 ```
 
 ## Current Boundary

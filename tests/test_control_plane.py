@@ -314,9 +314,29 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
         ),
         b"",
     )
+    replayed_audit_query = app.handle_request(
+        "GET",
+        "/audit-events?actor=incident-commander-1&method=POST&path=/incidents/open&replayed=true",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
     idempotency_query = app.handle_request(
         "GET",
         "/idempotency-records/open-incident-1",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
+    idempotency_list_query = app.handle_request(
+        "GET",
+        f"/idempotency-records?method=POST&path=/incidents/open&operation_id={operation_id}",
         _request_headers(
             "reader-token",
             actor="release-manager-1",
@@ -328,8 +348,15 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     assert audit_query.status_code == 200
     assert audit_query.payload["rows"]
     assert audit_query.payload["rows"][0]["operation_id"] == operation_id
+    assert replayed_audit_query.status_code == 200
+    assert replayed_audit_query.payload["rows"]
+    assert replayed_audit_query.payload["rows"][0]["replayed"] is True
+    assert replayed_audit_query.payload["rows"][0]["path"] == "/incidents/open"
     assert idempotency_query.status_code == 200
     assert idempotency_query.payload["idempotency_key"] == "open-incident-1"
+    assert idempotency_list_query.status_code == 200
+    assert idempotency_list_query.payload["rows"]
+    assert idempotency_list_query.payload["rows"][0]["operation_id"] == operation_id
 
 
 def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tmp_path: Path) -> None:

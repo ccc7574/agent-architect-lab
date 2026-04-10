@@ -91,7 +91,15 @@ class IdempotencyRepository(Protocol):
 
     def save(self, record: IdempotencyRecord) -> None: ...
 
-    def list_records(self, *, limit: int = 100) -> list[IdempotencyRecord]: ...
+    def list_records(
+        self,
+        *,
+        limit: int = 100,
+        method: str | None = None,
+        path: str | None = None,
+        operation_id: str | None = None,
+        status_code: int | None = None,
+    ) -> list[IdempotencyRecord]: ...
 
 
 @runtime_checkable
@@ -103,6 +111,13 @@ class AuditLogRepository(Protocol):
         *,
         request_id: str | None = None,
         operation_id: str | None = None,
+        actor: str | None = None,
+        role: str | None = None,
+        path: str | None = None,
+        method: str | None = None,
+        status_code: int | None = None,
+        replayed: bool | None = None,
+        conflict: bool | None = None,
         limit: int = 100,
     ) -> list[AuditEvent]: ...
 
@@ -123,7 +138,15 @@ class JsonIdempotencyRepository:
             registry.records[record.idempotency_key] = record
             registry.save(self.path)
 
-    def list_records(self, *, limit: int = 100) -> list[IdempotencyRecord]:
+    def list_records(
+        self,
+        *,
+        limit: int = 100,
+        method: str | None = None,
+        path: str | None = None,
+        operation_id: str | None = None,
+        status_code: int | None = None,
+    ) -> list[IdempotencyRecord]:
         with self._lock:
             registry = IdempotencyRegistry.load(self.path)
         records = sorted(
@@ -131,6 +154,14 @@ class JsonIdempotencyRepository:
             key=lambda item: (item.committed_at, item.idempotency_key),
             reverse=True,
         )
+        if method is not None:
+            records = [record for record in records if record.method == method]
+        if path is not None:
+            records = [record for record in records if record.path == path]
+        if operation_id is not None:
+            records = [record for record in records if record.operation_id == operation_id]
+        if status_code is not None:
+            records = [record for record in records if record.status_code == status_code]
         return records[:limit]
 
 
@@ -150,6 +181,13 @@ class JsonAuditLogRepository:
         *,
         request_id: str | None = None,
         operation_id: str | None = None,
+        actor: str | None = None,
+        role: str | None = None,
+        path: str | None = None,
+        method: str | None = None,
+        status_code: int | None = None,
+        replayed: bool | None = None,
+        conflict: bool | None = None,
         limit: int = 100,
     ) -> list[AuditEvent]:
         if not self.path.exists():
@@ -164,6 +202,20 @@ class JsonAuditLogRepository:
             rows = [row for row in rows if row.payload.get("request_id") == request_id]
         if operation_id is not None:
             rows = [row for row in rows if row.payload.get("operation_id") == operation_id]
+        if actor is not None:
+            rows = [row for row in rows if row.payload.get("actor") == actor]
+        if role is not None:
+            rows = [row for row in rows if row.payload.get("role") == role]
+        if path is not None:
+            rows = [row for row in rows if row.payload.get("path") == path]
+        if method is not None:
+            rows = [row for row in rows if row.payload.get("method") == method]
+        if status_code is not None:
+            rows = [row for row in rows if row.payload.get("status_code") == status_code]
+        if replayed is not None:
+            rows = [row for row in rows if bool(row.payload.get("replayed")) is replayed]
+        if conflict is not None:
+            rows = [row for row in rows if bool(row.payload.get("conflict")) is conflict]
         rows.sort(
             key=lambda item: (
                 str(item.payload.get("occurred_at", "")),

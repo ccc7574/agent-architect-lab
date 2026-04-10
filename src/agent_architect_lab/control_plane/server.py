@@ -294,6 +294,13 @@ class ControlPlaneApp:
                     for event in self.audit_repository.list_events(
                         request_id=request_id_filter,
                         operation_id=operation_id_filter,
+                        actor=_query_optional_string(query, "actor"),
+                        role=_query_optional_string(query, "role"),
+                        path=_query_optional_string(query, "path"),
+                        method=_query_optional_string(query, "method"),
+                        status_code=_query_optional_int(query, "status_code"),
+                        replayed=_query_optional_bool(query, "replayed"),
+                        conflict=_query_optional_bool(query, "conflict"),
                         limit=limit,
                     )
                 ]
@@ -307,7 +314,16 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 limit = _query_int(query, "limit", default=100, minimum=1)
-                rows = [record.to_dict() for record in self.idempotency_repository.list_records(limit=limit)]
+                rows = [
+                    record.to_dict()
+                    for record in self.idempotency_repository.list_records(
+                        limit=limit,
+                        method=_query_optional_string(query, "method"),
+                        path=_query_optional_string(query, "path"),
+                        operation_id=_query_optional_string(query, "operation_id"),
+                        status_code=_query_optional_int(query, "status_code"),
+                    )
+                ]
                 return respond(ControlPlaneResponse(200, {"rows": rows, "total": len(rows)}))
             idempotency_match = re.fullmatch(r"/idempotency-records/([^/]+)", path)
             if method == "GET" and idempotency_match is not None:
@@ -1179,6 +1195,30 @@ def _query_optional_string(
             f"Query parameter '{key}' must be one of: {', '.join(sorted(allowed))}."
         )
     return value
+
+
+def _query_optional_int(query: Mapping[str, list[str]], key: str) -> int | None:
+    raw_values = query.get(key)
+    if not raw_values:
+        return None
+    try:
+        return int(raw_values[-1])
+    except ValueError as exc:
+        raise ValueError(f"Query parameter '{key}' must be an integer.") from exc
+
+
+def _query_optional_bool(query: Mapping[str, list[str]], key: str) -> bool | None:
+    raw_values = query.get(key)
+    if not raw_values:
+        return None
+    value = raw_values[-1].strip().lower()
+    if not value:
+        return None
+    if value in {"true", "1", "yes"}:
+        return True
+    if value in {"false", "0", "no"}:
+        return False
+    raise ValueError(f"Query parameter '{key}' must be a boolean.")
 
 
 def _query_environments(query: Mapping[str, list[str]], settings: Settings) -> list[str]:
