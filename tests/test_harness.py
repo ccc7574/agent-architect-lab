@@ -1541,3 +1541,26 @@ def test_incident_ledger_tracks_open_transition_and_review_priority(tmp_path: Pa
     assert board.rows[0].incident_id == opened.incident_id
     assert board.rows[0].risk_level == "high"
     assert board.rows[0].recommended_action == "escalate_incident_owner"
+
+
+def test_incident_cannot_close_before_resolution(tmp_path: Path) -> None:
+    incidents_dir = tmp_path / "incidents"
+    ledger_path = default_incident_ledger_path(incidents_dir)
+    opened = open_incident(
+        severity="high",
+        summary="staging instability",
+        owner="incident-commander",
+        ledger_path=ledger_path,
+    )
+
+    try:
+        transition_incident(
+            opened.incident_id,
+            status="closed",
+            actor="incident-commander",
+            ledger_path=ledger_path,
+        )
+    except ValueError as exc:
+        assert "Cannot transition incident" in str(exc)
+    else:
+        raise AssertionError("Expected direct incident closure to be rejected before resolution.")

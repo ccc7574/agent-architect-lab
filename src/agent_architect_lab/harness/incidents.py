@@ -533,9 +533,9 @@ def _incident_review_action(status: str, *, is_stale: bool, has_followup_eval: b
 
 def _validate_incident_transition(current_status: str, next_status: str) -> None:
     allowed = {
-        "open": {"acknowledged", "contained", "resolved", "closed"},
-        "acknowledged": {"contained", "resolved", "closed"},
-        "contained": {"resolved", "closed"},
+        "open": {"acknowledged", "contained", "resolved"},
+        "acknowledged": {"contained", "resolved"},
+        "contained": {"resolved"},
         "resolved": {"closed"},
         "closed": set(),
     }
