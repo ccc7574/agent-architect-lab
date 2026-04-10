@@ -2,11 +2,11 @@
 
 `agent-architect-lab` now exposes a lightweight internal HTTP control plane on top of the existing release and incident ledgers.
 
-The control plane now has three internal layers:
+The control plane now has four internal layers:
 
 - `server.py`: HTTP routing and response envelope
 - `policies.py`: centralized route and payload policy checks
-- `repositories.py`: repository bundle assembly for local JSON-backed persistence
+- `repositories.py`: repository bundle assembly for local JSON or SQLite-backed persistence
 - `storage.py` / `jobs.py`: persistence repositories plus persisted in-process job execution
 
 ## Why It Exists
@@ -25,6 +25,13 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 ```
 
 The server is stdlib-only and keeps artifact storage exactly where the CLI keeps it.
+
+To switch the control plane to SQLite-backed persistence:
+
+```bash
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_STORAGE_BACKEND=sqlite
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH=/tmp/agent-architect-lab-control-plane.sqlite3
+```
 
 ## Authentication
 

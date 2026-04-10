@@ -2,11 +2,11 @@
 
 `agent-architect-lab` 现在已经在现有 release / incident ledger 之上提供了一个轻量 HTTP control plane。
 
-当前 control plane 内部已经拆成三层：
+当前 control plane 内部已经拆成四层：
 
 - `server.py`：HTTP 路由和统一响应 envelope
 - `policies.py`：集中式 route / payload policy 校验
-- `repositories.py`：本地 JSON persistence 的 repository bundle 装配层
+- `repositories.py`：本地 JSON 或 SQLite persistence 的 repository bundle 装配层
 - `storage.py` / `jobs.py`：持久化 repository 和持久化的内置 job 执行
 
 ## 为什么要有这一层
@@ -25,6 +25,13 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 ```
 
 这个服务只依赖 Python 标准库，底层仍然直接复用 CLI 使用的 artifact 存储。
+
+如果要切到 SQLite 持久化后端，可以增加：
+
+```bash
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_STORAGE_BACKEND=sqlite
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH=/tmp/agent-architect-lab-control-plane.sqlite3
+```
 
 ## 鉴权规则
 

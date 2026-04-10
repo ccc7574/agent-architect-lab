@@ -13,6 +13,8 @@ class Settings:
     project_root: Path
     artifacts_dir: Path
     control_plane_dir: Path
+    control_plane_storage_backend: str
+    control_plane_sqlite_path: Path
     control_plane_request_log_path: Path
     control_plane_idempotency_path: Path
     control_plane_job_registry_path: Path
@@ -70,6 +72,19 @@ def load_settings() -> Settings:
         os.environ.get("AGENT_ARCHITECT_LAB_ARTIFACTS", _default_artifacts_dir(project_root))
     ).resolve()
     control_plane_dir = artifacts_dir / "control-plane"
+    control_plane_storage_backend = (
+        os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_STORAGE_BACKEND", "json").strip().lower() or "json"
+    )
+    if control_plane_storage_backend not in {"json", "sqlite"}:
+        raise ValueError(
+            "AGENT_ARCHITECT_LAB_CONTROL_PLANE_STORAGE_BACKEND must be 'json' or 'sqlite'."
+        )
+    control_plane_sqlite_path = Path(
+        os.environ.get(
+            "AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH",
+            str(control_plane_dir / "control-plane.sqlite3"),
+        )
+    ).resolve()
     control_plane_request_log_path = control_plane_dir / "mutation-requests.jsonl"
     control_plane_idempotency_path = control_plane_dir / "idempotency-registry.json"
     control_plane_job_registry_path = control_plane_dir / "job-registry.json"
@@ -267,6 +282,8 @@ def load_settings() -> Settings:
         project_root=project_root,
         artifacts_dir=artifacts_dir,
         control_plane_dir=control_plane_dir,
+        control_plane_storage_backend=control_plane_storage_backend,
+        control_plane_sqlite_path=control_plane_sqlite_path,
         control_plane_request_log_path=control_plane_request_log_path,
         control_plane_idempotency_path=control_plane_idempotency_path,
         control_plane_job_registry_path=control_plane_job_registry_path,

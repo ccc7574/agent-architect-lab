@@ -21,12 +21,24 @@ from agent_architect_lab.control_plane.reporting import record_operator_handoff_
 from agent_architect_lab.control_plane.server import ControlPlaneApp, build_control_plane_app, create_control_plane_server
 
 
-def _configure_env(monkeypatch, tmp_path: Path, *, mutation_token: str | None = "writer-token") -> None:
+def _configure_env(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    mutation_token: str | None = "writer-token",
+    control_plane_backend: str = "json",
+) -> None:
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES", "0")
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN", "reader-token")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_STORAGE_BACKEND", control_plane_backend)
+    if control_plane_backend == "sqlite":
+        monkeypatch.setenv(
+            "AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH",
+            str(tmp_path / "artifacts" / "control-plane" / "control-plane.sqlite3"),
+        )
     if mutation_token is None:
         monkeypatch.delenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN", raising=False)
     else:
@@ -807,6 +819,105 @@ def test_control_plane_server_retries_failed_jobs(monkeypatch, tmp_path: Path) -
         assert Path(final_payload["result_payload"]["saved_to"]).exists()
         assert list_response.status == 200
         assert any(row["job_id"] == job_id for row in list_payload["rows"])
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_supports_sqlite_backend(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-governance-summary",
+            body=json.dumps(
+                {
+                    "title": "SQLite Governance Summary",
+                    "output": str(tmp_path / "sqlite-governance.md"),
+                    "release_limit": 5,
+                    "incident_limit": 5,
+                    "override_limit": 5,
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="sqlite-job-governance-summary-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        final_payload = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] == "succeeded":
+                final_payload = status_payload
+                break
+
+        operation_id = create_payload["_control_plane"]["operation_id"]
+        connection.request(
+            "GET",
+            f"/audit-events?event_type=mutation_committed&operation_id={operation_id}&limit=5",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        audit_response = connection.getresponse()
+        audit_payload = json.loads(audit_response.read().decode("utf-8"))
+
+        connection.request(
+            "GET",
+            f"/idempotency-records?operation_id={operation_id}&status_code=202&limit=5",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        idempotency_response = connection.getresponse()
+        idempotency_payload = json.loads(idempotency_response.read().decode("utf-8"))
+        connection.close()
+
+        assert settings.control_plane_storage_backend == "sqlite"
+        assert settings.control_plane_sqlite_path.exists()
+        assert create_response.status == 202
+        assert final_payload is not None
+        assert final_payload["status"] == "succeeded"
+        assert Path(final_payload["result_payload"]["saved_to"]).exists()
+        assert audit_response.status == 200
+        assert audit_payload["rows"]
+        assert audit_payload["rows"][0]["operation_id"] == operation_id
+        assert idempotency_response.status == 200
+        assert idempotency_payload["rows"]
+        assert idempotency_payload["rows"][0]["operation_id"] == operation_id
     finally:
         server.shutdown()
         server.server_close()
