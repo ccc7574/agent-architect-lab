@@ -12,7 +12,7 @@ authors = [{ name = "OpenAI Codex" }]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
 [project.scripts]
 agent-lab = "agent_architect_lab.cli:main"
@@ -22,3 +22,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
