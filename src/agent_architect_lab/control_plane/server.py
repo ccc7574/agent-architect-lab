@@ -10,17 +10,21 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
-from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
+from agent_architect_lab.control_plane.jobs import ControlPlaneJobRepository, ControlPlaneJobWorker
 from agent_architect_lab.control_plane.policies import (
     AuthorizationContext,
     ControlPlanePolicyEngine,
     IdentityContext,
 )
+from agent_architect_lab.control_plane.repositories import (
+    ControlPlaneRepositories,
+    create_local_control_plane_repositories,
+)
 from agent_architect_lab.control_plane.reporting import build_governance_summary_payload
 from agent_architect_lab.control_plane.storage import (
+    AuditLogRepository,
     IdempotencyRecord,
-    JsonAuditLogRepository,
-    JsonIdempotencyRepository,
+    IdempotencyRepository,
 )
 from agent_architect_lab.harness.incidents import get_incident_review_board, open_incident, transition_incident
 from agent_architect_lab.harness.ledger import (
@@ -82,10 +86,10 @@ class ControlPlaneAuth:
 class ControlPlaneApp:
     settings: Settings
     auth: ControlPlaneAuth
-    job_store: ControlPlaneJobStore
+    job_store: ControlPlaneJobRepository
     job_worker: ControlPlaneJobWorker
-    idempotency_repository: JsonIdempotencyRepository
-    audit_repository: JsonAuditLogRepository
+    idempotency_repository: IdempotencyRepository
+    audit_repository: AuditLogRepository
     policy_engine: ControlPlanePolicyEngine
 
     def handle_request(
@@ -694,7 +698,12 @@ class ControlPlaneApp:
         )
         if decision.allowed:
             return authorization, None
-        return None, _error_response(400 if decision.code == "missing_identity" else 403, decision.code, decision.message)
+        return None, _error_response(
+            400 if decision.code == "missing_identity" else 403,
+            decision.code,
+            decision.message,
+            details=decision.details,
+        )
 
     def _execute_mutation(
         self,
@@ -764,7 +773,12 @@ class ControlPlaneApp:
             payload=payload,
         )
         if not payload_decision.allowed:
-            return _error_response(403, payload_decision.code, payload_decision.message)
+            return _error_response(
+                403,
+                payload_decision.code,
+                payload_decision.message,
+                details=payload_decision.details,
+            )
         result_payload = handler(payload)
         operation_id = f"op-{uuid4().hex[:12]}"
         committed_at = utc_now_iso()
@@ -923,27 +937,40 @@ def create_control_plane_server(
     port: int | None = None,
 ) -> tuple[ControlPlaneHTTPServer, ControlPlaneApp]:
     resolved_settings = settings or load_settings()
-    job_store = ControlPlaneJobStore(resolved_settings.control_plane_job_registry_path)
-    job_worker = ControlPlaneJobWorker(settings=resolved_settings, store=job_store)
-    app = ControlPlaneApp(
+    repositories = create_local_control_plane_repositories(resolved_settings)
+    app = build_control_plane_app(
+        settings=resolved_settings,
+        repositories=repositories,
+    )
+    server = ControlPlaneHTTPServer(
+        (host or resolved_settings.control_plane_host, port if port is not None else resolved_settings.control_plane_port),
+        _build_handler(app),
+        job_worker=app.job_worker,
+    )
+    app.job_worker.start()
+    return server, app
+
+
+def build_control_plane_app(
+    *,
+    settings: Settings | None = None,
+    repositories: ControlPlaneRepositories | None = None,
+) -> ControlPlaneApp:
+    resolved_settings = settings or load_settings()
+    resolved_repositories = repositories or create_local_control_plane_repositories(resolved_settings)
+    job_worker = ControlPlaneJobWorker(settings=resolved_settings, store=resolved_repositories.jobs)
+    return ControlPlaneApp(
         settings=resolved_settings,
         auth=ControlPlaneAuth(
             read_token=resolved_settings.control_plane_read_token,
             mutation_token=resolved_settings.control_plane_mutation_token,
         ),
-        job_store=job_store,
+        job_store=resolved_repositories.jobs,
         job_worker=job_worker,
-        idempotency_repository=JsonIdempotencyRepository(resolved_settings.control_plane_idempotency_path),
-        audit_repository=JsonAuditLogRepository(resolved_settings.control_plane_request_log_path),
+        idempotency_repository=resolved_repositories.idempotency,
+        audit_repository=resolved_repositories.audit,
         policy_engine=ControlPlanePolicyEngine(resolved_settings.control_plane_role_policies),
     )
-    server = ControlPlaneHTTPServer(
-        (host or resolved_settings.control_plane_host, port if port is not None else resolved_settings.control_plane_port),
-        _build_handler(app),
-        job_worker=job_worker,
-    )
-    job_worker.start()
-    return server, app
 
 
 def _build_handler(app: ControlPlaneApp) -> type[BaseHTTPRequestHandler]:
@@ -980,14 +1007,23 @@ def _build_handler(app: ControlPlaneApp) -> type[BaseHTTPRequestHandler]:
     return ControlPlaneHandler
 
 
-def _error_response(status_code: int, code: str, message: str) -> ControlPlaneResponse:
+def _error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    details: Mapping[str, Any] | None = None,
+) -> ControlPlaneResponse:
+    error = {
+        "code": code,
+        "message": message,
+    }
+    if details:
+        error["details"] = dict(details)
     return ControlPlaneResponse(
         status_code,
         {
-            "error": {
-                "code": code,
-                "message": message,
-            }
+            "error": error
         },
     )
 
@@ -1006,12 +1042,6 @@ def _extract_bearer_token(header_value: str) -> str | None:
         return None
     token = parts[1].strip()
     return token or None
-
-
-@dataclass(slots=True)
-class IdentityContext:
-    actor: str
-    role: str
 
 
 def _identity_context(headers: Mapping[str, str]) -> IdentityContext | None:

@@ -16,10 +16,9 @@ from agent_architect_lab.cli import (
 )
 from agent_architect_lab.config import load_settings
 from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
-from agent_architect_lab.control_plane.policies import ControlPlanePolicyEngine
+from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.control_plane.reporting import record_operator_handoff_snapshot
-from agent_architect_lab.control_plane.server import ControlPlaneApp, ControlPlaneAuth, create_control_plane_server
-from agent_architect_lab.control_plane.storage import JsonAuditLogRepository, JsonIdempotencyRepository
+from agent_architect_lab.control_plane.server import ControlPlaneApp, build_control_plane_app, create_control_plane_server
 
 
 def _configure_env(monkeypatch, tmp_path: Path, *, mutation_token: str | None = "writer-token") -> None:
@@ -85,19 +84,9 @@ def _request_headers(
 
 
 def _build_app(settings) -> ControlPlaneApp:
-    job_store = ControlPlaneJobStore(settings.control_plane_job_registry_path)
-    job_worker = ControlPlaneJobWorker(settings=settings, store=job_store)
-    return ControlPlaneApp(
+    return build_control_plane_app(
         settings=settings,
-        auth=ControlPlaneAuth(
-            read_token=settings.control_plane_read_token,
-            mutation_token=settings.control_plane_mutation_token,
-        ),
-        job_store=job_store,
-        job_worker=job_worker,
-        idempotency_repository=JsonIdempotencyRepository(settings.control_plane_idempotency_path),
-        audit_repository=JsonAuditLogRepository(settings.control_plane_request_log_path),
-        policy_engine=ControlPlanePolicyEngine(settings.control_plane_role_policies),
+        repositories=create_local_control_plane_repositories(settings),
     )
 
 
@@ -161,6 +150,8 @@ def test_control_plane_app_requires_identity_for_governance_routes(monkeypatch, 
 
     assert response.status_code == 400
     assert response.payload["error"]["code"] == "missing_identity"
+    assert response.payload["error"]["details"]["route_policy_key"] == "read_governance"
+    assert response.payload["error"]["details"]["required_headers"] == ["X-Control-Plane-Actor", "X-Control-Plane-Role"]
 
 
 def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -> None:
@@ -188,6 +179,9 @@ def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -
 
     assert response.status_code == 403
     assert response.payload["error"]["code"] == "forbidden_role"
+    assert response.payload["error"]["details"]["route_policy_key"] == "open_incident"
+    assert response.payload["error"]["details"]["role"] == "qa-owner"
+    assert "incident-commander" in response.payload["error"]["details"]["required_roles"]
 
 
 def test_control_plane_app_requires_idempotency_key_for_mutations(monkeypatch, tmp_path: Path) -> None:
@@ -460,6 +454,8 @@ def test_control_plane_app_blocks_mismatched_approval_role(monkeypatch, tmp_path
 
     assert response.status_code == 403
     assert response.payload["error"]["code"] == "forbidden_approval_role"
+    assert response.payload["error"]["details"]["route_policy_key"] == "approve_release"
+    assert response.payload["error"]["details"]["requested_role"] == "release-manager"
 
 
 def test_control_plane_worker_retries_job_until_success(monkeypatch, tmp_path: Path) -> None:

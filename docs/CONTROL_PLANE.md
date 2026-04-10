@@ -6,6 +6,7 @@ The control plane now has three internal layers:
 
 - `server.py`: HTTP routing and response envelope
 - `policies.py`: centralized route and payload policy checks
+- `repositories.py`: repository bundle assembly for local JSON-backed persistence
 - `storage.py` / `jobs.py`: persistence repositories plus persisted in-process job execution
 
 ## Why It Exists
@@ -39,6 +40,7 @@ The server is stdlib-only and keeps artifact storage exactly where the CLI keeps
 - Idempotency registry state is persisted in `artifacts/control-plane/idempotency-registry.json`
 - Long-running exports are persisted in `artifacts/control-plane/job-registry.json`
 - Every API response now includes `_meta.request_id` for correlation
+- Policy rejections now include structured `error.details` metadata for dashboards and audits
 
 Default role policy keys:
 

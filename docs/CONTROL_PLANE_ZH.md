@@ -6,6 +6,7 @@
 
 - `server.py`：HTTP 路由和统一响应 envelope
 - `policies.py`：集中式 route / payload policy 校验
+- `repositories.py`：本地 JSON persistence 的 repository bundle 装配层
 - `storage.py` / `jobs.py`：持久化 repository 和持久化的内置 job 执行
 
 ## 为什么要有这一层
@@ -39,6 +40,7 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 - idempotency 状态会持久化到 `artifacts/control-plane/idempotency-registry.json`
 - 长时间运行的导出任务会持久化到 `artifacts/control-plane/job-registry.json`
 - 每个 API 响应现在都会带 `_meta.request_id` 方便串联日志和审计
+- policy 拒绝现在会返回结构化的 `error.details`，方便 dashboard 和审计系统直接消费
 
 默认内置的 role policy key：
 
