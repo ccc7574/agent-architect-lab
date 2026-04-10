@@ -162,6 +162,7 @@ Use `grant-release-override` to waive a specific deploy blocker for one release 
 Use `list-active-overrides` to audit currently effective overrides across releases or for a specific environment.
 Use `release-readiness-digest <release_name>` as the operator-facing summary view for a release. It condenses blocking environments, recommended actions, active overrides, and soon-to-expire overrides into one payload.
 Use `release-risk-board` to rank multiple recorded releases by operator risk so oncall can decide what to inspect first.
+Use `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to escalate long-idle releases into the risk board and handoff summary.
 Use `override-review-board` to prioritize override cleanup and renewal work across releases, including expired overrides and overrides missing an expiry.
 Use `revoke-release-override` to close an override without deleting its audit trail from the ledger.
 Use `operator-handoff` to generate a combined shift handoff payload containing release risk, override remediation, active overrides, and a summary line for the next operator.

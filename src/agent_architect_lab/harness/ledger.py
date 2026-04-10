@@ -523,6 +523,8 @@ class ReleaseRiskBoardRow:
     blocking_environments: list[str] = field(default_factory=list)
     active_override_count: int = 0
     expiring_override_count: int = 0
+    is_stale: bool = False
+    minutes_since_update: int = 0
     next_action: str = "observe_release"
     last_updated_at: str = ""
     summary: str = ""
@@ -536,6 +538,8 @@ class ReleaseRiskBoardRow:
             "blocking_environments": self.blocking_environments,
             "active_override_count": self.active_override_count,
             "expiring_override_count": self.expiring_override_count,
+            "is_stale": self.is_stale,
+            "minutes_since_update": self.minutes_since_update,
             "next_action": self.next_action,
             "last_updated_at": self.last_updated_at,
             "summary": self.summary,
@@ -876,6 +880,7 @@ class ReleaseLedger:
         environment_policies: dict[str, dict[str, object]],
         environment_freeze_windows: dict[str, list[str]],
         override_expiring_soon_minutes: int,
+        release_stale_minutes: int,
         limit: int,
     ) -> ReleaseRiskBoard:
         rows: list[ReleaseRiskBoardRow] = []
@@ -899,6 +904,15 @@ class ReleaseLedger:
                 for environment in digest.blocking_environments
                 if digest.recommended_actions.get(environment) != "no_action_already_active"
             ]
+            minutes_since_update = _minutes_since(record.last_updated_at)
+            is_stale = _release_is_stale(
+                record.state,
+                minutes_since_update=minutes_since_update,
+                release_stale_minutes=release_stale_minutes,
+                unresolved_blocking_environments=unresolved_blocking_environments,
+                active_override_count=len(digest.active_overrides),
+                expiring_override_count=len(digest.expiring_overrides),
+            )
             rows.append(
                 ReleaseRiskBoardRow(
                     release_name=record.release_name,
@@ -908,15 +922,19 @@ class ReleaseLedger:
                         unresolved_blocking_environments=unresolved_blocking_environments,
                         active_override_count=len(digest.active_overrides),
                         expiring_override_count=len(digest.expiring_overrides),
+                        is_stale=is_stale,
                     ),
                     active_environments=active_environments,
                     blocking_environments=unresolved_blocking_environments,
                     active_override_count=len(digest.active_overrides),
                     expiring_override_count=len(digest.expiring_overrides),
+                    is_stale=is_stale,
+                    minutes_since_update=minutes_since_update,
                     next_action=_release_board_next_action(
                         unresolved_blocking_environments=unresolved_blocking_environments,
                         recommended_actions=digest.recommended_actions,
                         active_override_count=len(digest.active_overrides),
+                        is_stale=is_stale,
                     ),
                     last_updated_at=record.last_updated_at,
                     summary=digest.summary,
@@ -986,6 +1004,7 @@ class ReleaseLedger:
         environment_policies: dict[str, dict[str, object]],
         environment_freeze_windows: dict[str, list[str]],
         override_expiring_soon_minutes: int,
+        release_stale_minutes: int,
         release_limit: int,
         override_limit: int,
     ) -> OperatorHandoff:
@@ -996,6 +1015,7 @@ class ReleaseLedger:
             environment_policies=environment_policies,
             environment_freeze_windows=environment_freeze_windows,
             override_expiring_soon_minutes=override_expiring_soon_minutes,
+            release_stale_minutes=release_stale_minutes,
             limit=release_limit,
         )
         override_review_board = self.override_review_board(
@@ -1638,10 +1658,11 @@ def _release_risk_level(
     unresolved_blocking_environments: list[str],
     active_override_count: int,
     expiring_override_count: int,
+    is_stale: bool,
 ) -> str:
     if release_state in {"blocked", "rejected"}:
         return "high"
-    if unresolved_blocking_environments or expiring_override_count:
+    if unresolved_blocking_environments or expiring_override_count or is_stale:
         return "high"
     if active_override_count:
         return "medium"
@@ -1653,7 +1674,10 @@ def _release_board_next_action(
     unresolved_blocking_environments: list[str],
     recommended_actions: dict[str, str],
     active_override_count: int,
+    is_stale: bool,
 ) -> str:
+    if is_stale:
+        return "review_stale_release"
     for environment in unresolved_blocking_environments:
         action = recommended_actions.get(environment)
         if action:
@@ -1663,18 +1687,45 @@ def _release_board_next_action(
     return "observe_release"
 
 
+def _release_is_stale(
+    release_state: str,
+    *,
+    minutes_since_update: int,
+    release_stale_minutes: int,
+    unresolved_blocking_environments: list[str],
+    active_override_count: int,
+    expiring_override_count: int,
+) -> bool:
+    if release_stale_minutes < 0:
+        return False
+    if release_state in {"rejected"}:
+        return False
+    should_track_staleness = (
+        release_state in {"blocked", "pending_approval", "approved"}
+        or bool(unresolved_blocking_environments)
+        or active_override_count > 0
+        or expiring_override_count > 0
+    )
+    if not should_track_staleness:
+        return False
+    return minutes_since_update >= release_stale_minutes
+
+
 def _build_operator_handoff_summary(
     *,
     release_risk_board: ReleaseRiskBoard,
     override_review_board: OverrideReviewBoard,
 ) -> str:
     high_risk_releases = [row.release_name for row in release_risk_board.rows if row.risk_level == "high"]
+    stale_releases = [row.release_name for row in release_risk_board.rows if row.is_stale]
     expired_overrides = [row for row in override_review_board.rows if row.status == "expired"]
     expiring_overrides = [row for row in override_review_board.rows if row.status == "expiring_soon"]
     if high_risk_releases:
         summary = "High-risk releases: " + ", ".join(high_risk_releases) + "."
     else:
         summary = "No high-risk releases in the current handoff window."
+    if stale_releases:
+        summary += " Stale releases: " + ", ".join(stale_releases) + "."
     if expired_overrides:
         summary += f" {len(expired_overrides)} override(s) already expired."
     if expiring_overrides:
@@ -1983,6 +2034,7 @@ def get_release_risk_board(
     environment_policies: dict[str, dict[str, object]] | None = None,
     environment_freeze_windows: dict[str, list[str]] | None = None,
     override_expiring_soon_minutes: int = 120,
+    release_stale_minutes: int = 240,
     limit: int = 20,
 ) -> ReleaseRiskBoard:
     ledger = ReleaseLedger.load(ledger_path)
@@ -1993,6 +2045,7 @@ def get_release_risk_board(
         environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
         override_expiring_soon_minutes=override_expiring_soon_minutes,
+        release_stale_minutes=release_stale_minutes,
         limit=limit,
     )
 
@@ -2023,6 +2076,7 @@ def get_operator_handoff(
     environment_policies: dict[str, dict[str, object]] | None = None,
     environment_freeze_windows: dict[str, list[str]] | None = None,
     override_expiring_soon_minutes: int = 120,
+    release_stale_minutes: int = 240,
     release_limit: int = 20,
     override_limit: int = 50,
 ) -> OperatorHandoff:
@@ -2034,6 +2088,7 @@ def get_operator_handoff(
         environment_policies=dict(environment_policies or {}),
         environment_freeze_windows=dict(environment_freeze_windows or {}),
         override_expiring_soon_minutes=override_expiring_soon_minutes,
+        release_stale_minutes=release_stale_minutes,
         release_limit=release_limit,
         override_limit=override_limit,
     )

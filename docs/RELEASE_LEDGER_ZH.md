@@ -327,7 +327,10 @@ override 只用于紧急场景，不应该替代正常流程。
 - 是否还有未解决的环境 blocker
 - 是否存在即将过期的 override
 - 是否存在仍在生效的 override
+- 是否已经长时间无人推进而变成 stale release
 - 当前 release state
+
+可以通过 `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` 控制 release 多久未更新后进入风险看板和交接摘要。
 
 它的目标不是替代 `release-readiness-digest`，而是帮助值班人员先决定“先看哪个 release”。
 

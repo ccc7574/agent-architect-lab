@@ -245,7 +245,8 @@ When a release name is supplied, each matrix row also includes a `recommended_ac
 Overrides are scoped to one release, one environment, and one exact blocker string. They are intended for time-bounded emergency waivers, not as a replacement for normal approval flow.
 `list-active-overrides` only returns overrides whose expiry has not passed yet.
 `release-readiness-digest` uses `AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES` to decide which overrides should be flagged as expiring soon. The default threshold is `120` minutes.
-`release-risk-board` ranks releases by unresolved environment blockers, expiring overrides, and active override footprint so operators can focus on the riskiest release first.
+`release-risk-board` ranks releases by unresolved environment blockers, expiring overrides, active override footprint, and stale update age so operators can focus on the riskiest release first.
+Set `AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES` to control when a long-idle release is escalated into the risk board and handoff summary.
 `override-review-board` ranks individual overrides into `expired`, `expiring_soon`, `active_no_expiry`, and `active`, with a remediation action for each row.
 `revoke-release-override` marks the latest matching override as revoked. Revoked overrides stop affecting readiness checks and stop appearing in active override views, but remain in `release-status` for audit history.
 `operator-handoff` packages the risk board, override review board, and active override list into a single shift handoff payload with a generated summary.

@@ -34,6 +34,7 @@ class Settings:
     environment_policies: dict[str, dict[str, object]]
     environment_freeze_windows: dict[str, list[str]]
     override_expiring_soon_minutes: int
+    release_stale_minutes: int
 
 
 def _default_artifacts_dir(project_root: Path) -> Path:
@@ -115,6 +116,9 @@ def load_settings() -> Settings:
     override_expiring_soon_minutes = int(
         os.environ.get("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "120")
     )
+    release_stale_minutes = int(
+        os.environ.get("AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES", "240")
+    )
     configured_environment_names = os.environ.get("AGENT_ARCHITECT_LAB_ENVIRONMENTS")
     if configured_environment_names is not None:
         environment_names = [
@@ -167,4 +171,5 @@ def load_settings() -> Settings:
         environment_policies=environment_policies,
         environment_freeze_windows=environment_freeze_windows,
         override_expiring_soon_minutes=override_expiring_soon_minutes,
+        release_stale_minutes=release_stale_minutes,
     )

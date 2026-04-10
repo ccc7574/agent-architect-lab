@@ -222,7 +222,7 @@ def test_cmd_check_deploy_readiness_reports_blockers(monkeypatch, tmp_path: Path
         cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
         cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
         cmd_approve_release("release-a", "qa-owner", "", "approved")
-        cmd_deploy_release("release-a", "staging", "release-manager", "deploy A")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy staging")
 
     buffer = io.StringIO()
     with redirect_stdout(buffer):
@@ -550,6 +550,38 @@ def test_cmd_release_risk_board_reports_ranked_rows(monkeypatch, tmp_path: Path)
     assert payload["rows"][0]["expiring_override_count"] == 1
     assert payload["rows"][1]["release_name"] == "release-low"
     assert payload["rows"][1]["risk_level"] == "low"
+
+
+def test_cmd_release_risk_board_flags_stale_release(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ENVIRONMENTS", "staging")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_RELEASE_STALE_MINUTES", "0")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+
+    risk_buffer = io.StringIO()
+    with redirect_stdout(risk_buffer):
+        risk_exit = cmd_release_risk_board([], 10)
+    risk_payload = json.loads(risk_buffer.getvalue())
+
+    handoff_buffer = io.StringIO()
+    with redirect_stdout(handoff_buffer):
+        handoff_exit = cmd_operator_handoff([], 10, 10)
+    handoff_payload = json.loads(handoff_buffer.getvalue())
+
+    assert risk_exit == 0
+    assert risk_payload["rows"][0]["release_name"] == "release-a"
+    assert risk_payload["rows"][0]["risk_level"] == "high"
+    assert risk_payload["rows"][0]["is_stale"] is True
+    assert risk_payload["rows"][0]["minutes_since_update"] >= 0
+    assert risk_payload["rows"][0]["next_action"] == "review_stale_release"
+    assert handoff_exit == 0
+    assert "Stale releases: release-a." in handoff_payload["summary"]
 
 
 def test_cmd_override_review_board_reports_remediation_priority(monkeypatch, tmp_path: Path) -> None:

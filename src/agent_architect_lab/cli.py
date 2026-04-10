@@ -632,6 +632,7 @@ def cmd_release_risk_board(environments: list[str], limit: int) -> int:
         environment_policies=settings.environment_policies,
         environment_freeze_windows=settings.environment_freeze_windows,
         override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        release_stale_minutes=settings.release_stale_minutes,
         limit=limit,
     )
     print(json.dumps(board.to_dict(), indent=2))
@@ -661,6 +662,7 @@ def cmd_operator_handoff(environments: list[str], release_limit: int, override_l
         environment_policies=settings.environment_policies,
         environment_freeze_windows=settings.environment_freeze_windows,
         override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        release_stale_minutes=settings.release_stale_minutes,
         release_limit=release_limit,
         override_limit=override_limit,
     )
@@ -683,6 +685,7 @@ def cmd_record_operator_handoff(
         environment_policies=settings.environment_policies,
         environment_freeze_windows=settings.environment_freeze_windows,
         override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+        release_stale_minutes=settings.release_stale_minutes,
         release_limit=release_limit,
         override_limit=override_limit,
     )
