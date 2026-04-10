@@ -76,6 +76,9 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
 - `GET /jobs?status=queued&limit=50`
 - `GET /jobs/{job_id}`
+- `GET /audit-events?request_id=req-...&operation_id=op-...&limit=100`
+- `GET /idempotency-records?limit=100`
+- `GET /idempotency-records/{idempotency_key}`
 
 ### Mutation Routes
 
@@ -190,6 +193,26 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/jobs/job-abc123def456
+```
+
+Inspect recent audit events:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  "http://127.0.0.1:8080/audit-events?limit=20"
+```
+
+Inspect a stored idempotent mutation:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/idempotency-records/export-governance-summary-001
 ```
 
 ## Current Boundary

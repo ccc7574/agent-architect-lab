@@ -301,6 +301,35 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     assert audit_rows[0]["role"] == "incident-commander"
     assert audit_rows[0]["token_scope"] == "mutation"
 
+    request_id = opened.payload["_meta"]["request_id"]
+    operation_id = opened.payload["_control_plane"]["operation_id"]
+    audit_query = app.handle_request(
+        "GET",
+        f"/audit-events?request_id={request_id}",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
+    idempotency_query = app.handle_request(
+        "GET",
+        "/idempotency-records/open-incident-1",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
+
+    assert audit_query.status_code == 200
+    assert audit_query.payload["rows"]
+    assert audit_query.payload["rows"][0]["operation_id"] == operation_id
+    assert idempotency_query.status_code == 200
+    assert idempotency_query.payload["idempotency_key"] == "open-incident-1"
+
 
 def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
@@ -525,6 +554,17 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
             status_payload = json.loads(status_response.read().decode("utf-8"))
             if status_payload["status"] in {"succeeded", "failed"}:
                 break
+        connection.request(
+            "GET",
+            "/audit-events?limit=5",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        audit_response = connection.getresponse()
+        audit_payload = json.loads(audit_response.read().decode("utf-8"))
         connection.close()
 
         assert create_response.status == 202
@@ -532,6 +572,8 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         assert status_payload["status"] == "succeeded"
         assert Path(status_payload["result_payload"]["saved_to"]).exists()
         assert "Async Governance Summary" in Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        assert audit_response.status == 200
+        assert audit_payload["rows"]
     finally:
         server.shutdown()
         server.server_close()

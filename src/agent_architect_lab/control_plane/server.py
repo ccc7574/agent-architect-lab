@@ -248,6 +248,50 @@ class ControlPlaneApp:
                     return respond(auth_error)
                 job = self.job_store.get_job(job_match.group(1))
                 return respond(ControlPlaneResponse(200, job.to_dict()))
+            if method == "GET" and path == "/audit-events":
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_jobs",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                limit = _query_int(query, "limit", default=100, minimum=1)
+                request_id_filter = _query_optional_string(query, "request_id")
+                operation_id_filter = _query_optional_string(query, "operation_id")
+                events = [
+                    event.to_dict()
+                    for event in self.audit_repository.list_events(
+                        request_id=request_id_filter,
+                        operation_id=operation_id_filter,
+                        limit=limit,
+                    )
+                ]
+                return respond(ControlPlaneResponse(200, {"rows": events, "total": len(events)}))
+            if method == "GET" and path == "/idempotency-records":
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_jobs",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                limit = _query_int(query, "limit", default=100, minimum=1)
+                rows = [record.to_dict() for record in self.idempotency_repository.list_records(limit=limit)]
+                return respond(ControlPlaneResponse(200, {"rows": rows, "total": len(rows)}))
+            idempotency_match = re.fullmatch(r"/idempotency-records/([^/]+)", path)
+            if method == "GET" and idempotency_match is not None:
+                _authorization, auth_error = self._authorize_route(
+                    scope="read",
+                    route_policy_key="read_jobs",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                record = self.idempotency_repository.get(idempotency_match.group(1))
+                if record is None:
+                    return respond(_error_response(404, "not_found", f"Unknown idempotency key '{idempotency_match.group(1)}'."))
+                return respond(ControlPlaneResponse(200, record.to_dict()))
             if method == "POST" and path == "/jobs/export-governance-summary":
                 authorization, auth_error = self._authorize_route(
                     scope="write",
