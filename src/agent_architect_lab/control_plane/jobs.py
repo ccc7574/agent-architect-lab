@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Any, Callable
+from typing import Any, Callable, Protocol, runtime_checkable
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings
@@ -34,9 +34,11 @@ class ControlPlaneJob:
     operation_id: str | None = None
     attempts: int = 0
     max_attempts: int = 1
+    queue_reason: str = "initial_enqueue"
     input_payload: JobPayload = field(default_factory=dict)
     result_payload: JobPayload | None = None
     error: JobPayload | None = None
+    last_error: JobPayload | None = None
     started_at: str | None = None
     completed_at: str | None = None
 
@@ -53,9 +55,11 @@ class ControlPlaneJob:
             "operation_id": self.operation_id,
             "attempts": self.attempts,
             "max_attempts": self.max_attempts,
+            "queue_reason": self.queue_reason,
             "input_payload": self.input_payload,
             "result_payload": self.result_payload,
             "error": self.error,
+            "last_error": self.last_error,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
         }
@@ -74,9 +78,11 @@ class ControlPlaneJob:
             operation_id=payload.get("operation_id"),
             attempts=int(payload.get("attempts", 0)),
             max_attempts=int(payload.get("max_attempts", 1)),
+            queue_reason=str(payload.get("queue_reason", "initial_enqueue") or "initial_enqueue"),
             input_payload=dict(payload.get("input_payload", {})),
             result_payload=dict(payload["result_payload"]) if isinstance(payload.get("result_payload"), dict) else payload.get("result_payload"),
             error=dict(payload["error"]) if isinstance(payload.get("error"), dict) else payload.get("error"),
+            last_error=dict(payload["last_error"]) if isinstance(payload.get("last_error"), dict) else payload.get("last_error"),
             started_at=payload.get("started_at"),
             completed_at=payload.get("completed_at"),
         )
@@ -99,6 +105,41 @@ class ControlPlaneJobRegistry:
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+
+@runtime_checkable
+class ControlPlaneJobRepository(Protocol):
+    def create_job(
+        self,
+        *,
+        job_type: str,
+        payload: JobPayload,
+        requested_by_actor: str | None,
+        requested_by_role: str | None,
+        request_id: str | None,
+        operation_id: str | None,
+        max_attempts: int = 1,
+    ) -> ControlPlaneJob: ...
+
+    def list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        job_type: str | None = None,
+        request_id: str | None = None,
+        operation_id: str | None = None,
+    ) -> list[ControlPlaneJob]: ...
+
+    def get_job(self, job_id: str) -> ControlPlaneJob: ...
+
+    def claim_next_job(self) -> ControlPlaneJob | None: ...
+
+    def complete_job(self, job_id: str, result_payload: JobPayload) -> ControlPlaneJob: ...
+
+    def fail_job(self, job_id: str, error_payload: JobPayload) -> ControlPlaneJob: ...
+
+    def requeue_job(self, job_id: str, *, max_attempts: int | None = None) -> ControlPlaneJob: ...
 
 
 class ControlPlaneJobStore:
@@ -129,6 +170,7 @@ class ControlPlaneJobStore:
             request_id=request_id,
             operation_id=operation_id,
             max_attempts=max_attempts,
+            queue_reason="initial_enqueue",
             input_payload=dict(payload),
         )
         with self._lock:
@@ -137,12 +179,26 @@ class ControlPlaneJobStore:
             registry.save(self.path)
         return job
 
-    def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[ControlPlaneJob]:
+    def list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        job_type: str | None = None,
+        request_id: str | None = None,
+        operation_id: str | None = None,
+    ) -> list[ControlPlaneJob]:
         with self._lock:
             registry = ControlPlaneJobRegistry.load(self.path)
         jobs = registry.jobs
         if status is not None:
             jobs = [job for job in jobs if job.status == status]
+        if job_type is not None:
+            jobs = [job for job in jobs if job.job_type == job_type]
+        if request_id is not None:
+            jobs = [job for job in jobs if job.request_id == request_id]
+        if operation_id is not None:
+            jobs = [job for job in jobs if job.operation_id == operation_id]
         jobs = sorted(jobs, key=lambda item: (item.created_at, item.job_id), reverse=True)
         return jobs[:limit]
 
@@ -185,6 +241,7 @@ class ControlPlaneJobStore:
             job.error = None
             job.completed_at = now
             job.updated_at = now
+            job.queue_reason = "completed"
             registry.save(self.path)
             return job
 
@@ -193,10 +250,36 @@ class ControlPlaneJobStore:
             registry = ControlPlaneJobRegistry.load(self.path)
             job = _find_job(registry, job_id)
             now = utc_now_iso()
-            job.status = "failed"
-            job.error = dict(error_payload)
-            job.completed_at = now
+            latest_error = dict(error_payload)
+            job.last_error = latest_error
+            if job.attempts < job.max_attempts:
+                job.status = "queued"
+                job.error = None
+                job.completed_at = None
+                job.queue_reason = "automatic_retry"
+            else:
+                job.status = "failed"
+                job.error = latest_error
+                job.completed_at = now
+                job.queue_reason = "failed"
             job.updated_at = now
+            registry.save(self.path)
+            return job
+
+    def requeue_job(self, job_id: str, *, max_attempts: int | None = None) -> ControlPlaneJob:
+        with self._lock:
+            registry = ControlPlaneJobRegistry.load(self.path)
+            job = _find_job(registry, job_id)
+            if job.status != "failed":
+                raise ValueError(f"Only failed jobs can be retried. Job '{job_id}' is currently '{job.status}'.")
+            if max_attempts is not None and max_attempts <= job.attempts:
+                raise ValueError("Field 'max_attempts' must be greater than the number of attempts already used.")
+            job.status = "queued"
+            job.max_attempts = max_attempts or max(job.max_attempts, job.attempts + 1)
+            job.error = None
+            job.completed_at = None
+            job.updated_at = utc_now_iso()
+            job.queue_reason = "manual_retry"
             registry.save(self.path)
             return job
 
@@ -206,7 +289,7 @@ class ControlPlaneJobWorker:
         self,
         *,
         settings: Settings,
-        store: ControlPlaneJobStore,
+        store: ControlPlaneJobRepository,
         handlers: dict[str, JobHandler] | None = None,
         poll_interval_s: float | None = None,
     ) -> None:

@@ -235,7 +235,16 @@ class ControlPlaneApp:
                     allowed={"queued", "running", "succeeded", "failed"},
                 )
                 limit = _query_int(query, "limit", default=50, minimum=1)
-                jobs = [job.to_dict() for job in self.job_store.list_jobs(status=status, limit=limit)]
+                jobs = [
+                    job.to_dict()
+                    for job in self.job_store.list_jobs(
+                        status=status,
+                        limit=limit,
+                        job_type=_query_optional_string(query, "job_type"),
+                        request_id=_query_optional_string(query, "request_id"),
+                        operation_id=_query_optional_string(query, "operation_id"),
+                    )
+                ]
                 return respond(ControlPlaneResponse(200, {"rows": jobs, "total": len(jobs)}))
             job_match = re.fullmatch(r"/jobs/([^/]+)", path)
             if method == "GET" and job_match is not None:
@@ -248,6 +257,27 @@ class ControlPlaneApp:
                     return respond(auth_error)
                 job = self.job_store.get_job(job_match.group(1))
                 return respond(ControlPlaneResponse(200, job.to_dict()))
+            job_retry_match = re.fullmatch(r"/jobs/([^/]+)/retry", path)
+            if method == "POST" and job_retry_match is not None:
+                authorization, auth_error = self._authorize_route(
+                    scope="write",
+                    route_policy_key="retry_job",
+                    headers=headers,
+                )
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._retry_job(job_retry_match.group(1), payload=payload),
+                        success_status_code=200,
+                    )
+                )
             if method == "GET" and path == "/audit-events":
                 _authorization, auth_error = self._authorize_route(
                     scope="read",
@@ -758,6 +788,13 @@ class ControlPlaneApp:
         )
         return response
 
+    def _retry_job(self, job_id: str, *, payload: Mapping[str, Any]) -> dict[str, Any]:
+        job = self.job_store.requeue_job(
+            job_id,
+            max_attempts=_optional_int(payload, "max_attempts"),
+        )
+        return job.to_dict()
+
     def _enqueue_job(
         self,
         *,
@@ -1032,7 +1069,7 @@ def _optional_string(payload: Mapping[str, Any], key: str) -> str | None:
     return stripped or None
 
 
-def _optional_int(payload: Mapping[str, Any], key: str, *, default: int) -> int:
+def _optional_int(payload: Mapping[str, Any], key: str, *, default: int | None = None) -> int | None:
     value = payload.get(key)
     if value is None:
         return default
@@ -1077,6 +1114,8 @@ def _route_policy_key_for_path(method: str, path: str) -> str:
             return "create_export_job"
         if path == "/jobs/export-operator-handoff-report":
             return "create_export_job"
+        if re.fullmatch(r"/jobs/[^/]+/retry", path):
+            return "retry_job"
         if path == "/incidents/open":
             return "open_incident"
         if re.fullmatch(r"/incidents/[^/]+/transition", path):

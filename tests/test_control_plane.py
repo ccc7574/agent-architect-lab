@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
 from agent_architect_lab.config import load_settings
 from agent_architect_lab.control_plane.jobs import ControlPlaneJobStore, ControlPlaneJobWorker
 from agent_architect_lab.control_plane.policies import ControlPlanePolicyEngine
+from agent_architect_lab.control_plane.reporting import record_operator_handoff_snapshot
 from agent_architect_lab.control_plane.server import ControlPlaneApp, ControlPlaneAuth, create_control_plane_server
 from agent_architect_lab.control_plane.storage import JsonAuditLogRepository, JsonIdempotencyRepository
 
@@ -434,6 +435,56 @@ def test_control_plane_app_blocks_mismatched_approval_role(monkeypatch, tmp_path
     assert response.payload["error"]["code"] == "forbidden_approval_role"
 
 
+def test_control_plane_worker_retries_job_until_success(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    store = ControlPlaneJobStore(settings.control_plane_job_registry_path)
+    call_count = {"value": 0}
+
+    def flaky_handler(_settings, payload):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            raise ValueError("transient export failure")
+        return {"task": payload["task"], "attempt": call_count["value"]}
+
+    worker = ControlPlaneJobWorker(
+        settings=settings,
+        store=store,
+        handlers={"flaky_job": flaky_handler},
+        poll_interval_s=0.01,
+    )
+    store.create_job(
+        job_type="flaky_job",
+        payload={"task": "governance-export"},
+        requested_by_actor="release-manager-1",
+        requested_by_role="release-manager",
+        request_id="req-flaky-job",
+        operation_id=None,
+        max_attempts=2,
+    )
+
+    worker.start()
+    try:
+        for _ in range(40):
+            time.sleep(0.05)
+            job = store.list_jobs(limit=1)[0]
+            if job.status == "succeeded":
+                break
+        else:
+            job = store.list_jobs(limit=1)[0]
+
+        assert job.status == "succeeded"
+        assert job.attempts == 2
+        assert job.error is None
+        assert job.last_error is not None
+        assert job.last_error["code"] == "job_execution_failed"
+        assert job.last_error["message"] == "transient export failure"
+        assert job.result_payload == {"task": "governance-export", "attempt": 2}
+        assert job.queue_reason == "completed"
+    finally:
+        worker.stop()
+
+
 def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     _seed_release_state()
@@ -574,6 +625,137 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         assert "Async Governance Summary" in Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert audit_response.status == 200
         assert audit_payload["rows"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_retries_failed_jobs(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-operator-handoff-report",
+            body=json.dumps(
+                {
+                    "latest": True,
+                    "title": "Retried Handoff Report",
+                    "output": str(tmp_path / "retried-handoff.md"),
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-handoff-report-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        failed_payload = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] == "failed":
+                failed_payload = status_payload
+                break
+
+        record_operator_handoff_snapshot(
+            settings,
+            environments=settings.environment_names,
+            release_limit=5,
+            override_limit=5,
+            label="retry-ready",
+        )
+
+        connection.request(
+            "POST",
+            f"/jobs/{job_id}/retry",
+            body=json.dumps({}),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-handoff-report-retry-1",
+                ),
+            },
+        )
+        retry_response = connection.getresponse()
+        retry_payload = json.loads(retry_response.read().decode("utf-8"))
+
+        final_payload = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] == "succeeded":
+                final_payload = status_payload
+                break
+
+        request_id = create_payload["_meta"]["request_id"]
+        connection.request(
+            "GET",
+            f"/jobs?job_type=export_operator_handoff_report&request_id={request_id}&limit=5",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        list_response = connection.getresponse()
+        list_payload = json.loads(list_response.read().decode("utf-8"))
+        connection.close()
+
+        assert create_response.status == 202
+        assert create_payload["status"] == "queued"
+        assert failed_payload is not None
+        assert failed_payload["status"] == "failed"
+        assert failed_payload["last_error"]["code"] == "job_execution_failed"
+        assert retry_response.status == 200
+        assert retry_payload["status"] == "queued"
+        assert retry_payload["queue_reason"] == "manual_retry"
+        assert final_payload is not None
+        assert final_payload["status"] == "succeeded"
+        assert final_payload["attempts"] == 2
+        assert final_payload["last_error"]["code"] == "job_execution_failed"
+        assert Path(final_payload["result_payload"]["saved_to"]).exists()
+        assert list_response.status == 200
+        assert any(row["job_id"] == job_id for row in list_payload["rows"])
     finally:
         server.shutdown()
         server.server_close()

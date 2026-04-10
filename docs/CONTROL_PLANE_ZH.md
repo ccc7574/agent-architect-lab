@@ -74,7 +74,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /approval-review-board?environment=staging&environment=production&limit=20`
 - `GET /incident-review-board?status=open&limit=20`
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
-- `GET /jobs?status=queued&limit=50`
+- `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
 - `GET /audit-events?request_id=req-...&operation_id=op-...&limit=100`
 - `GET /idempotency-records?limit=100`
@@ -94,6 +94,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/export-governance-summary`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
+- `POST /jobs/{job_id}/retry`
 
 ## 示例请求
 
@@ -195,6 +196,22 @@ curl \
   http://127.0.0.1:8080/jobs/job-abc123def456
 ```
 
+依赖恢复后重试失败任务：
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: retry-job-abc123def456-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/job-abc123def456/retry \
+  -d '{
+    "max_attempts": 2
+  }'
+```
+
 查看最近的审计事件：
 
 ```bash
@@ -221,7 +238,7 @@ curl \
 
 - 读模型优先服务治理、审阅和值班流程
 - 当前写接口只覆盖 incident 创建与状态推进
-- 长时间运行的导出已经走持久化 worker，但还不是分布式队列
+- 长时间运行的导出已经走持久化 worker，并带有自动重试和人工 requeue，但还不是分布式队列
 - 存储仍然是本地 artifact JSON，而不是外部数据库
 - 权限现在已经通过集中式 route/payload policy engine 执行，但还不是完整统一的 RBAC 或外部 policy service
 - 现在已经有幂等、审计和 job persistence，但还没有分布式队列、分布式锁和更强的一致性协调

@@ -114,6 +114,12 @@ def load_settings() -> Settings:
                         "ops-oncall",
                         "incident-commander",
                     ],
+                    "retry_job": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                    ],
                     "approve_release": [
                         "control-plane-admin",
                         "release-manager",

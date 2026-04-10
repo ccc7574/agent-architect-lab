@@ -74,7 +74,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /approval-review-board?environment=staging&environment=production&limit=20`
 - `GET /incident-review-board?status=open&limit=20`
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
-- `GET /jobs?status=queued&limit=50`
+- `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
 - `GET /audit-events?request_id=req-...&operation_id=op-...&limit=100`
 - `GET /idempotency-records?limit=100`
@@ -94,6 +94,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/export-governance-summary`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
+- `POST /jobs/{job_id}/retry`
 
 ## Example Requests
 
@@ -195,6 +196,22 @@ curl \
   http://127.0.0.1:8080/jobs/job-abc123def456
 ```
 
+Retry a failed job after its dependency is restored:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: retry-job-abc123def456-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/job-abc123def456/retry \
+  -d '{
+    "max_attempts": 2
+  }'
+```
+
 Inspect recent audit events:
 
 ```bash
@@ -221,7 +238,7 @@ This control plane is intentionally narrow:
 
 - read models are optimized for governance and review flows
 - write models currently cover incident creation and incident transition
-- long-running exports already run through a persisted in-process worker, but not a distributed queue
+- long-running exports already run through a persisted in-process worker with automatic retry and manual requeue, but not a distributed queue
 - storage is still local artifact-backed JSON, not an external database
 - access control now goes through a centralized route/payload policy engine, but it is not yet a full RBAC or external policy service
 - idempotency, audit, and job persistence exist, but there is no distributed queue or lock coordination yet
