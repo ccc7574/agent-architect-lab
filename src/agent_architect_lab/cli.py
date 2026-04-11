@@ -53,6 +53,12 @@ from agent_architect_lab.harness.ledger import (
     rollback_release,
     transition_release,
 )
+from agent_architect_lab.harness.ledger_maintenance import (
+    backup_release_and_incident_ledgers,
+    build_ledger_storage_status,
+    restore_release_and_incident_ledger_backup,
+    verify_release_and_incident_ledger_backup,
+)
 from agent_architect_lab.harness.promotion import default_gate_config_for_suite, evaluate_promotion
 from agent_architect_lab.harness.release import run_release_shadow_review
 from agent_architect_lab.harness.reporting import HarnessReport, register_existing_report, save_report_and_record
@@ -112,6 +118,29 @@ def build_parser() -> argparse.ArgumentParser:
     restore_control_plane_backup_cmd.add_argument("backup_path", help="Backup archive path.")
     restore_control_plane_backup_cmd.add_argument("--output-dir", default="", help="Optional restore drill output directory.")
     restore_control_plane_backup_cmd.add_argument("--label", default="", help="Optional label for the restore drill directory.")
+    ledger_storage_status_cmd = subparsers.add_parser(
+        "ledger-storage-status",
+        help="Show release and incident ledger storage status, counts, and integrity metadata.",
+    )
+    backup_ledgers_cmd = subparsers.add_parser(
+        "backup-release-and-incident-ledgers",
+        help="Create a point-in-time backup archive for release and incident ledgers plus release manifests.",
+    )
+    backup_ledgers_cmd.add_argument("--output", default="", help="Optional output zip path.")
+    backup_ledgers_cmd.add_argument("--label", default="", help="Optional label added to the backup file name.")
+    verify_ledger_backup_cmd = subparsers.add_parser(
+        "verify-release-and-incident-ledger-backup",
+        help="Verify a release and incident ledger backup archive and inspect its manifest.",
+    )
+    verify_ledger_backup_cmd.add_argument("backup_path", help="Backup archive path.")
+    verify_ledger_backup_cmd.add_argument("--expected-sha256", default="", help="Optional SHA256 to verify against.")
+    restore_ledger_backup_cmd = subparsers.add_parser(
+        "restore-release-and-incident-ledger-backup",
+        help="Run a release and incident ledger backup restore drill into a target directory.",
+    )
+    restore_ledger_backup_cmd.add_argument("backup_path", help="Backup archive path.")
+    restore_ledger_backup_cmd.add_argument("--output-dir", default="", help="Optional restore drill output directory.")
+    restore_ledger_backup_cmd.add_argument("--label", default="", help="Optional label for the restore drill directory.")
 
     list_skills = subparsers.add_parser("list-skills", help="Show skill manifests and optional matches.")
     list_skills.add_argument("--goal", default="", help="Optional goal to test skill matching.")
@@ -636,6 +665,47 @@ def cmd_restore_control_plane_backup(backup_path: str, output_dir: str, label: s
     print(
         json.dumps(
             restore_control_plane_backup(
+                settings,
+                backup_path=backup_path,
+                output_dir=output_dir,
+                label=label,
+            ),
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_ledger_storage_status() -> int:
+    settings = load_settings()
+    print(json.dumps(build_ledger_storage_status(settings), indent=2))
+    return 0
+
+
+def cmd_backup_release_and_incident_ledgers(output: str, label: str) -> int:
+    settings = load_settings()
+    print(json.dumps(backup_release_and_incident_ledgers(settings, output=output, label=label), indent=2))
+    return 0
+
+
+def cmd_verify_release_and_incident_ledger_backup(backup_path: str, expected_sha256: str) -> int:
+    print(
+        json.dumps(
+            verify_release_and_incident_ledger_backup(
+                backup_path,
+                expected_sha256=expected_sha256,
+            ),
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_restore_release_and_incident_ledger_backup(backup_path: str, output_dir: str, label: str) -> int:
+    settings = load_settings()
+    print(
+        json.dumps(
+            restore_release_and_incident_ledger_backup(
                 settings,
                 backup_path=backup_path,
                 output_dir=output_dir,
@@ -1662,6 +1732,14 @@ def main() -> int:
         return cmd_verify_control_plane_backup(args.backup_path, args.expected_sha256)
     if args.command == "restore-control-plane-backup":
         return cmd_restore_control_plane_backup(args.backup_path, args.output_dir, args.label)
+    if args.command == "ledger-storage-status":
+        return cmd_ledger_storage_status()
+    if args.command == "backup-release-and-incident-ledgers":
+        return cmd_backup_release_and_incident_ledgers(args.output, args.label)
+    if args.command == "verify-release-and-incident-ledger-backup":
+        return cmd_verify_release_and_incident_ledger_backup(args.backup_path, args.expected_sha256)
+    if args.command == "restore-release-and-incident-ledger-backup":
+        return cmd_restore_release_and_incident_ledger_backup(args.backup_path, args.output_dir, args.label)
     if args.command == "list-skills":
         return cmd_list_skills(args.goal)
     if args.command == "explain-patterns":

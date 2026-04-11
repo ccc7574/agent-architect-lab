@@ -14,6 +14,15 @@ Under `artifacts/releases`:
 - `manifests/{release_name}.json`: immutable release snapshot
 - `release-ledger.json`: mutable release state and event history
 
+Under `artifacts/incidents`:
+
+- `incident-ledger.json`: mutable incident state and response history
+
+Backup and restore drill artifacts are stored under:
+
+- `artifacts/ledger-backups`: point-in-time backup archives
+- `artifacts/ledger-restore-drills`: extracted restore drill directories
+
 ## State Model
 
 The release ledger currently uses these states:
@@ -253,6 +262,33 @@ Render a manager-facing governance summary:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
+```
+
+Inspect ledger storage status before a backup or restore drill:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli ledger-storage-status
+```
+
+Create a release and incident ledger backup archive:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli backup-release-and-incident-ledgers --label nightly
+```
+
+Verify the backup archive and its cross-ledger integrity:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli verify-release-and-incident-ledger-backup \
+  artifacts/ledger-backups/release-incident-ledgers-backup.zip
+```
+
+Run a restore drill into an isolated directory:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli restore-release-and-incident-ledger-backup \
+  artifacts/ledger-backups/release-incident-ledgers-backup.zip \
+  --label weekly-drill
 ```
 
 Grant a temporary override for a specific blocker:

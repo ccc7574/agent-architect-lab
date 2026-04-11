@@ -8,6 +8,15 @@
   保存不可变的 release 快照，记录当时被评审的 suites、candidate report、baseline 来源和结论。
 - `artifacts/releases/release-ledger.json`
   保存可变的操作账本，记录审批、部署、回滚、重新激活、override 等运行期动作。
+- `artifacts/incidents/incident-ledger.json`
+  保存可变的 incident 账本，记录事故状态推进、责任人、关联 release 和 follow-up artifact。
+
+账本备份与恢复演练产物会落在：
+
+- `artifacts/ledger-backups`
+  保存 release/incident ledger 和 release manifests 的时间点备份包。
+- `artifacts/ledger-restore-drills`
+  保存恢复演练后的解压目录，方便做离线校验和取证。
 
 这样做的目的，是保证团队能同时回答下面几类问题：
 
@@ -208,6 +217,33 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
+```
+
+查看账本存储状态和完整性：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli ledger-storage-status
+```
+
+备份 release 与 incident 账本：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli backup-release-and-incident-ledgers --label nightly
+```
+
+校验备份包以及跨账本引用完整性：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli verify-release-and-incident-ledger-backup \
+  artifacts/ledger-backups/release-incident-ledgers-backup.zip
+```
+
+执行一次隔离目录恢复演练：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli restore-release-and-incident-ledger-backup \
+  artifacts/ledger-backups/release-incident-ledgers-backup.zip \
+  --label weekly-drill
 ```
 
 查看当前环境策略：

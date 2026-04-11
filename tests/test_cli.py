@@ -8,6 +8,7 @@ from pathlib import Path
 from agent_architect_lab.cli import (
     cmd_approval_review_board,
     cmd_approve_release,
+    cmd_backup_release_and_incident_ledgers,
     cmd_check_deploy_readiness,
     cmd_environment_history,
     cmd_deploy_policy,
@@ -16,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_explain_patterns,
     cmd_incident_review_board,
     cmd_incident_status,
+    cmd_ledger_storage_status,
     cmd_export_incident_report,
     cmd_export_incident_bundle,
     cmd_export_governance_summary,
@@ -42,6 +44,8 @@ from agent_architect_lab.cli import (
     cmd_run_release_shadow,
     cmd_show_operator_handoff,
     cmd_transition_incident,
+    cmd_restore_release_and_incident_ledger_backup,
+    cmd_verify_release_and_incident_ledger_backup,
 )
 
 
@@ -284,6 +288,72 @@ def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_
     assert "## Override Pressure" in markdown
     assert "unsafe production answer" in markdown
     assert payload["metrics"]["active_incident_count"] == 1
+
+
+def test_cmd_release_and_incident_ledger_backup_round_trip(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_open_incident(
+            "high",
+            "staging rollback triggered",
+            "incident-commander",
+            "staging",
+            "release-a",
+            "/tmp/report.json",
+            "triage started",
+        )
+
+    status_buffer = io.StringIO()
+    with redirect_stdout(status_buffer):
+        status_exit = cmd_ledger_storage_status()
+    status_payload = json.loads(status_buffer.getvalue())
+
+    backup_buffer = io.StringIO()
+    with redirect_stdout(backup_buffer):
+        backup_exit = cmd_backup_release_and_incident_ledgers("", "nightly")
+    backup_payload = json.loads(backup_buffer.getvalue())
+    backup_path = Path(backup_payload["saved_to"])
+
+    verify_buffer = io.StringIO()
+    with redirect_stdout(verify_buffer):
+        verify_exit = cmd_verify_release_and_incident_ledger_backup(
+            str(backup_path),
+            backup_payload["sha256"],
+        )
+    verify_payload = json.loads(verify_buffer.getvalue())
+
+    restore_buffer = io.StringIO()
+    with redirect_stdout(restore_buffer):
+        restore_exit = cmd_restore_release_and_incident_ledger_backup(
+            str(backup_path),
+            "",
+            "nightly-drill",
+        )
+    restore_payload = json.loads(restore_buffer.getvalue())
+
+    assert status_exit == 0
+    assert status_payload["counts"]["release_records"] == 1
+    assert status_payload["counts"]["incident_records"] == 1
+    assert status_payload["counts"]["release_manifests"] == 1
+    assert status_payload["integrity"]["valid"] is True
+    assert backup_exit == 0
+    assert backup_path.exists()
+    assert backup_payload["entries"]
+    assert verify_exit == 0
+    assert verify_payload["validated"] is True
+    assert verify_payload["counts"]["release_records"] == 1
+    assert verify_payload["counts"]["incident_records"] == 1
+    assert verify_payload["counts"]["release_manifests"] == 1
+    assert restore_exit == 0
+    assert "manifest.json" in restore_payload["restored_files"]
+    assert "releases/release-ledger.json" in restore_payload["restored_files"]
+    assert "incidents/incident-ledger.json" in restore_payload["restored_files"]
+    assert "releases/manifests/release-a.json" in restore_payload["restored_files"]
+    assert restore_payload["validation"]["validated"] is True
 
 
 def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, tmp_path: Path) -> None:

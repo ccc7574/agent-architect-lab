@@ -4,9 +4,13 @@ import json
 import os
 from pathlib import Path
 
+from agent_architect_lab.config import load_settings
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import (
+    IncidentEvent,
+    IncidentLedger,
+    IncidentRecord,
     default_incident_ledger_path,
     get_incident_record,
     get_incident_review_board,
@@ -16,6 +20,8 @@ from agent_architect_lab.harness.incidents import (
 )
 from agent_architect_lab.harness.ledger import (
     ReleaseManifest,
+    ReleaseEvent,
+    ReleaseRecord,
     get_approval_review_board,
     check_deploy_readiness,
     get_deploy_policy,
@@ -36,6 +42,11 @@ from agent_architect_lab.harness.ledger import (
     revoke_release_override,
     rollback_release,
     transition_release,
+)
+from agent_architect_lab.harness.ledger_maintenance import (
+    backup_release_and_incident_ledgers,
+    build_ledger_storage_status,
+    verify_release_and_incident_ledger_backup,
 )
 from agent_architect_lab.harness.policies import summarize_policy_findings
 from agent_architect_lab.harness.promotion import default_gate_config_for_suite, evaluate_promotion
@@ -1593,3 +1604,107 @@ def test_incident_cannot_close_without_followup_eval(tmp_path: Path) -> None:
         assert "follow-up eval artifact" in str(exc)
     else:
         raise AssertionError("Expected incident closure to require a linked follow-up eval.")
+
+
+def test_build_ledger_storage_status_flags_missing_release_references(monkeypatch, tmp_path: Path) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(artifacts_dir))
+    settings = load_settings()
+
+    release_ledger = ReleaseLedger(
+        records=[
+            ReleaseRecord(
+                release_name="release-missing",
+                manifest_path=str(settings.release_manifests_dir / "release-missing.json"),
+                created_at="2026-04-11T00:00:00+00:00",
+                last_updated_at="2026-04-11T00:00:00+00:00",
+                state="pending_approval",
+                recommended_action="hold",
+                summary="missing manifest",
+                events=[
+                    ReleaseEvent(
+                        timestamp="2026-04-11T00:00:00+00:00",
+                        action="create",
+                        actor="system",
+                        from_state="none",
+                        to_state="pending_approval",
+                    )
+                ],
+            )
+        ]
+    )
+    release_ledger.save(settings.release_ledger_path)
+
+    incident_ledger = IncidentLedger(
+        records=[
+            IncidentRecord(
+                incident_id="incident-1",
+                created_at="2026-04-11T00:00:00+00:00",
+                last_updated_at="2026-04-11T00:00:00+00:00",
+                severity="high",
+                status="open",
+                summary="unknown release reference",
+                owner="incident-commander",
+                release_name="release-unknown",
+                events=[
+                    IncidentEvent(
+                        timestamp="2026-04-11T00:00:00+00:00",
+                        action="open",
+                        actor="incident-commander",
+                        from_status="none",
+                        to_status="open",
+                    )
+                ],
+            )
+        ]
+    )
+    incident_ledger.save(settings.incident_ledger_path)
+
+    status = build_ledger_storage_status(settings)
+
+    assert status["integrity"]["valid"] is False
+    assert status["integrity"]["missing_release_manifests"] == ["release-missing"]
+    assert status["integrity"]["incidents_missing_release_records"] == ["release-unknown"]
+
+
+def test_verify_release_and_incident_ledger_backup_rejects_broken_references(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(artifacts_dir))
+    settings = load_settings()
+
+    incident_ledger = IncidentLedger(
+        records=[
+            IncidentRecord(
+                incident_id="incident-1",
+                created_at="2026-04-11T00:00:00+00:00",
+                last_updated_at="2026-04-11T00:00:00+00:00",
+                severity="critical",
+                status="open",
+                summary="broken release reference",
+                owner="incident-commander",
+                release_name="missing-release",
+                events=[
+                    IncidentEvent(
+                        timestamp="2026-04-11T00:00:00+00:00",
+                        action="open",
+                        actor="incident-commander",
+                        from_status="none",
+                        to_status="open",
+                    )
+                ],
+            )
+        ]
+    )
+    incident_ledger.save(settings.incident_ledger_path)
+
+    backup = backup_release_and_incident_ledgers(settings, label="broken")
+
+    try:
+        verify_release_and_incident_ledger_backup(backup["saved_to"])
+    except ValueError as exc:
+        assert "unknown releases" in str(exc)
+    else:
+        raise AssertionError("Expected broken ledger backup verification to fail.")
