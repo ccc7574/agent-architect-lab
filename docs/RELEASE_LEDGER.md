@@ -199,13 +199,23 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident \
   --followup-eval-path ./incident-backfill.jsonl
 ```
 
+Link an existing follow-up eval artifact without changing the incident status:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli link-incident-followup-eval \
+  incident-20260410-example \
+  --path ./incident-backfill.jsonl \
+  --by incident-commander \
+  --note "postmortem eval attached"
+```
+
 Render an incident as a Markdown report:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-20260410-example --title "Incident Rollback Report"
 ```
 
-Export an incident bundle with linked release and handoff context:
+Export an incident bundle with linked release, handoff, and follow-up eval context:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle incident-20260410-example
@@ -359,8 +369,9 @@ Set `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to escalate long-idle approval 
 `open-incident`, `transition-incident`, `list-incidents`, and `incident-status` turn incident handling into an auditable state machine rather than ad hoc notes.
 `incident-review-board` ranks unresolved incidents by severity, stale age, and workflow status. Set `AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES` to escalate long-idle incidents.
 `export-incident-report` renders the incident state and timeline into Markdown so incident artifacts can be shared outside raw JSON or CLI output.
-`export-incident-bundle` packages the incident report, linked release state, and the most relevant handoff snapshot into one directory for postmortem or leadership review.
+`export-incident-bundle` packages the incident report, linked release state, the most relevant handoff snapshot, and the follow-up eval artifact when it exists into one directory for postmortem or leadership review.
 Incidents can only move to `closed` after they first reach `resolved`, and closure requires a linked follow-up eval artifact.
+The incident ledger now also records who linked the follow-up eval artifact and when that linkage happened.
 `override-review-board` ranks individual overrides into `expired`, `expiring_soon`, `active_no_expiry`, and `active`, with a remediation action for each row.
 `revoke-release-override` marks the latest matching override as revoked. Revoked overrides stop affecting readiness checks and stop appearing in active override views, but remain in `release-status` for audit history.
 `operator-handoff` packages the risk board, approval review board, incident review board, override review board, active incidents, and active override list into a single shift handoff payload with a generated summary.

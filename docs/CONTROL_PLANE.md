@@ -109,6 +109,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /releases/{release_name}/overrides/revoke`
 - `POST /incidents/open`
 - `POST /incidents/{incident_id}/transition`
+- `POST /incidents/{incident_id}/followup-eval`
 - `POST /jobs/export-governance-summary`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
@@ -208,6 +209,24 @@ curl \
     "by": "incident-commander",
     "note": "triage started",
     "owner": "ops-owner"
+  }'
+```
+
+Link a follow-up eval artifact to an incident:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: incident-commander-1" \
+  -H "X-Control-Plane-Role: incident-commander" \
+  -H "Idempotency-Key: incident-followup-link-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/incidents/incident-20260410abcd1234/followup-eval \
+  -d '{
+    "followup_eval_path": "/tmp/incident-backfill.jsonl",
+    "by": "incident-commander",
+    "note": "postmortem eval attached"
   }'
 ```
 

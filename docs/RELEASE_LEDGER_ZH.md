@@ -154,13 +154,23 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident \
   --followup-eval-path ./incident-backfill.jsonl
 ```
 
+在不改变 incident 状态的情况下，单独绑定已有的 follow-up eval artifact：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli link-incident-followup-eval \
+  incident-20260410-example \
+  --path ./incident-backfill.jsonl \
+  --by incident-commander \
+  --note "postmortem eval attached"
+```
+
 把 incident 导出为 Markdown 报告：
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-20260410-example --title "Incident Rollback Report"
 ```
 
-导出 incident bundle，把 release 与 handoff 上下文一起打包：
+导出 incident bundle，把 release、handoff 和 follow-up eval 上下文一起打包：
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle incident-20260410-example
@@ -495,8 +505,9 @@ override 只用于紧急场景，不应该替代正常流程。
 可以通过 `AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES` 控制 incident 多久未更新后升级。
 
 `export-incident-report` 会把 incident 当前状态和完整时间线渲染为 Markdown 报告，方便复盘和对外同步。
-`export-incident-bundle` 会把 incident 报告、关联 release 状态、相关 handoff 一起打包到一个目录里，方便复盘和管理层同步。
+`export-incident-bundle` 会把 incident 报告、关联 release 状态、相关 handoff，以及存在时的 follow-up eval artifact 一起打包到一个目录里，方便复盘和管理层同步。
 incident 只有先到 `resolved`，并且挂上 `follow-up eval` 之后，才允许进入 `closed`。
+incident ledger 现在还会显式记录是谁在什么时候绑定了这个 follow-up eval artifact。
 
 ## revoke override
 

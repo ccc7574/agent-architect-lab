@@ -28,7 +28,12 @@ from agent_architect_lab.control_plane.storage import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
-from agent_architect_lab.harness.incidents import get_incident_review_board, open_incident, transition_incident
+from agent_architect_lab.harness.incidents import (
+    get_incident_review_board,
+    link_incident_followup_eval,
+    open_incident,
+    transition_incident,
+)
 from agent_architect_lab.harness.ledger_maintenance import build_ledger_storage_status
 from agent_architect_lab.harness.ledger import (
     deploy_release,
@@ -783,6 +788,27 @@ class ControlPlaneApp:
                         note=_optional_string(payload, "note") or "",
                         owner=_optional_string(payload, "owner"),
                         followup_eval_path=_optional_string(payload, "followup_eval_path"),
+                        ledger_path=self.settings.incident_ledger_path,
+                    ).to_dict(),
+                    success_status_code=200,
+                ))
+            followup_link_match = re.fullmatch(r"/incidents/([^/]+)/followup-eval", path)
+            if method == "POST" and followup_link_match is not None:
+                authorization, auth_error = authorize("write", "transition_incident")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: link_incident_followup_eval(
+                        followup_link_match.group(1),
+                        followup_eval_path=_required_string(payload, "followup_eval_path"),
+                        actor=_required_string(payload, "by"),
+                        note=_optional_string(payload, "note") or "",
                         ledger_path=self.settings.incident_ledger_path,
                     ).to_dict(),
                     success_status_code=200,

@@ -82,6 +82,8 @@ class IncidentRecord:
     release_name: str | None = None
     source_report_path: str | None = None
     followup_eval_path: str | None = None
+    followup_eval_linked_at: str | None = None
+    followup_eval_linked_by: str | None = None
     events: list[IncidentEvent] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -97,6 +99,8 @@ class IncidentRecord:
             "release_name": self.release_name,
             "source_report_path": self.source_report_path,
             "followup_eval_path": self.followup_eval_path,
+            "followup_eval_linked_at": self.followup_eval_linked_at,
+            "followup_eval_linked_by": self.followup_eval_linked_by,
             "events": [event.to_dict() for event in self.events],
         }
 
@@ -114,6 +118,8 @@ class IncidentRecord:
             release_name=payload.get("release_name"),
             source_report_path=payload.get("source_report_path"),
             followup_eval_path=payload.get("followup_eval_path"),
+            followup_eval_linked_at=payload.get("followup_eval_linked_at"),
+            followup_eval_linked_by=payload.get("followup_eval_linked_by"),
             events=[IncidentEvent.from_dict(item) for item in payload.get("events", [])],
         )
 
@@ -245,7 +251,13 @@ class IncidentLedger:
         if owner:
             record.owner = owner
         if followup_eval_path:
-            record.followup_eval_path = followup_eval_path
+            _link_followup_eval(
+                record,
+                followup_eval_path=followup_eval_path,
+                actor=actor,
+                note="Follow-up eval linked during incident transition.",
+                emit_event=True,
+            )
         record.events.append(
             IncidentEvent(
                 timestamp=timestamp,
@@ -255,6 +267,24 @@ class IncidentLedger:
                 to_status=status,
                 note=note,
             )
+        )
+        return record
+
+    def link_followup_eval(
+        self,
+        incident_id: str,
+        *,
+        followup_eval_path: str,
+        actor: str,
+        note: str = "",
+    ) -> IncidentRecord:
+        record = self.get(incident_id)
+        _link_followup_eval(
+            record,
+            followup_eval_path=followup_eval_path,
+            actor=actor,
+            note=note,
+            emit_event=True,
         )
         return record
 
@@ -446,6 +476,25 @@ def transition_incident(
     return record
 
 
+def link_incident_followup_eval(
+    incident_id: str,
+    *,
+    followup_eval_path: str,
+    actor: str,
+    ledger_path: Path,
+    note: str = "",
+) -> IncidentRecord:
+    ledger = IncidentLedger.load(ledger_path)
+    record = ledger.link_followup_eval(
+        incident_id,
+        followup_eval_path=followup_eval_path,
+        actor=actor,
+        note=note,
+    )
+    ledger.save(ledger_path)
+    return record
+
+
 def list_incidents(
     *,
     ledger_path: Path,
@@ -518,6 +567,34 @@ def _incident_risk_level(severity: str, status: str, *, is_stale: bool) -> str:
     if status in {"open", "acknowledged", "contained"}:
         return "medium"
     return "low"
+
+
+def _link_followup_eval(
+    record: IncidentRecord,
+    *,
+    followup_eval_path: str,
+    actor: str,
+    note: str,
+    emit_event: bool,
+) -> None:
+    if not followup_eval_path.strip():
+        raise ValueError("followup_eval_path must not be empty.")
+    timestamp = utc_now_iso()
+    record.followup_eval_path = followup_eval_path
+    record.followup_eval_linked_at = timestamp
+    record.followup_eval_linked_by = actor
+    record.last_updated_at = timestamp
+    if emit_event:
+        record.events.append(
+            IncidentEvent(
+                timestamp=timestamp,
+                action="link_followup_eval",
+                actor=actor,
+                from_status=record.status,
+                to_status=record.status,
+                note=note or f"Linked follow-up eval artifact: {followup_eval_path}",
+            )
+        )
 
 
 def _incident_review_action(status: str, *, is_stale: bool, has_followup_eval: bool) -> str:

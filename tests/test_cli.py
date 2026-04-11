@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_explain_patterns,
     cmd_incident_review_board,
     cmd_incident_status,
+    cmd_link_incident_followup_eval,
     cmd_ledger_storage_status,
     cmd_export_incident_report,
     cmd_export_incident_bundle,
@@ -229,6 +230,17 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
         )
     open_payload = json.loads(open_buffer.getvalue())
 
+    followup_eval_path = tmp_path / "followup.jsonl"
+    followup_eval_path.write_text('{"id":"followup-1"}\n', encoding="utf-8")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_link_incident_followup_eval(
+            open_payload["incident_id"],
+            str(followup_eval_path),
+            "incident-commander",
+            "attach eval before closure",
+        )
+
     with redirect_stdout(io.StringIO()):
         cmd_record_operator_handoff([], 10, 10, "incident-shift")
 
@@ -242,10 +254,49 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
     assert open_exit == 0
     assert bundle_exit == 0
     assert (bundle_dir / "incident-report.md").exists()
+    assert (bundle_dir / "followup-eval" / "followup.jsonl").exists()
     assert manifest["incident"]["incident_id"] == open_payload["incident_id"]
+    assert manifest["incident"]["followup_eval_linked_by"] == "incident-commander"
     assert manifest["release_record"]["release_name"] == "release-a"
+    assert manifest["followup_eval_bundle_path"] is not None
     assert manifest["related_handoff_snapshot_path"] is not None
     assert manifest["related_handoff_report_path"] is not None
+
+
+def test_cmd_link_incident_followup_eval_records_explicit_linkage(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    open_buffer = io.StringIO()
+    with redirect_stdout(open_buffer):
+        cmd_open_incident(
+            "medium",
+            "retrieval drift under investigation",
+            "incident-commander",
+            "staging",
+            "release-a",
+            "",
+            "triage started",
+        )
+    incident_payload = json.loads(open_buffer.getvalue())
+
+    followup_eval_path = tmp_path / "linked-followup.jsonl"
+    followup_eval_path.write_text('{"id":"linked-followup"}\n', encoding="utf-8")
+
+    link_buffer = io.StringIO()
+    with redirect_stdout(link_buffer):
+        exit_code = cmd_link_incident_followup_eval(
+            incident_payload["incident_id"],
+            str(followup_eval_path),
+            "incident-commander",
+            "link explicit eval artifact",
+        )
+    payload = json.loads(link_buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["followup_eval_path"] == str(followup_eval_path)
+    assert payload["followup_eval_linked_by"] == "incident-commander"
+    assert payload["followup_eval_linked_at"] is not None
+    assert payload["events"][-1]["action"] == "link_followup_eval"
 
 
 def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_path: Path) -> None:

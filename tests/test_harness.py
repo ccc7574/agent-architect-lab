@@ -14,6 +14,7 @@ from agent_architect_lab.harness.incidents import (
     default_incident_ledger_path,
     get_incident_record,
     get_incident_review_board,
+    link_incident_followup_eval,
     list_incidents,
     open_incident,
     transition_incident,
@@ -1604,6 +1605,30 @@ def test_incident_cannot_close_without_followup_eval(tmp_path: Path) -> None:
         assert "follow-up eval artifact" in str(exc)
     else:
         raise AssertionError("Expected incident closure to require a linked follow-up eval.")
+
+
+def test_link_incident_followup_eval_records_actor_and_timestamp(tmp_path: Path) -> None:
+    incidents_dir = tmp_path / "incidents"
+    ledger_path = default_incident_ledger_path(incidents_dir)
+    opened = open_incident(
+        severity="high",
+        summary="planner regression under triage",
+        owner="incident-commander",
+        ledger_path=ledger_path,
+    )
+
+    linked = link_incident_followup_eval(
+        opened.incident_id,
+        followup_eval_path="/tmp/followup-eval.jsonl",
+        actor="incident-commander",
+        note="bind eval before closure",
+        ledger_path=ledger_path,
+    )
+
+    assert linked.followup_eval_path == "/tmp/followup-eval.jsonl"
+    assert linked.followup_eval_linked_by == "incident-commander"
+    assert linked.followup_eval_linked_at is not None
+    assert linked.events[-1].action == "link_followup_eval"
 
 
 def test_build_ledger_storage_status_flags_missing_release_references(monkeypatch, tmp_path: Path) -> None:

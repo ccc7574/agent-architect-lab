@@ -390,6 +390,54 @@ def test_control_plane_app_replays_idempotent_mutation_and_writes_audit(monkeypa
     assert idempotency_list_query.payload["rows"][0]["operation_id"] == operation_id
 
 
+def test_control_plane_app_links_incident_followup_eval(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    app = _build_app(settings)
+
+    opened = app.handle_request(
+        "POST",
+        "/incidents/open",
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="open-incident-followup-1",
+        ),
+        json.dumps(
+            {
+                "severity": "high",
+                "summary": "follow-up eval linkage required",
+                "owner": "incident-commander",
+            }
+        ).encode("utf-8"),
+    )
+    linked = app.handle_request(
+        "POST",
+        f"/incidents/{opened.payload['incident_id']}/followup-eval",
+        _request_headers(
+            "writer-token",
+            actor="incident-commander-1",
+            role="incident-commander",
+            idempotency_key="link-followup-eval-1",
+        ),
+        json.dumps(
+            {
+                "followup_eval_path": "/tmp/followup-eval.jsonl",
+                "by": "incident-commander",
+                "note": "bind eval artifact",
+            }
+        ).encode("utf-8"),
+    )
+
+    assert opened.status_code == 201
+    assert linked.status_code == 200
+    assert linked.payload["followup_eval_path"] == "/tmp/followup-eval.jsonl"
+    assert linked.payload["followup_eval_linked_by"] == "incident-commander"
+    assert linked.payload["followup_eval_linked_at"] is not None
+    assert linked.payload["events"][-1]["action"] == "link_followup_eval"
+
+
 def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()

@@ -31,6 +31,7 @@ An AI architect should be able to explain how the platform behaves when it is wr
 - add a new eval or tighten a gate
 - update routing or policy logic
 - attach the follow-up eval artifact to the incident before closure
+- record who linked that artifact and when, so closure is auditable
 
 ## Why This Matters
 

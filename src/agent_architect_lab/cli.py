@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 from re import sub
@@ -27,6 +28,7 @@ from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import (
     get_incident_record,
     get_incident_review_board,
+    link_incident_followup_eval,
     list_incidents,
     open_incident,
     save_incident_suggestions,
@@ -180,6 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
     transition_incident_cmd.add_argument("--note", default="", help="Optional transition note.")
     transition_incident_cmd.add_argument("--owner", default="", help="Optional owner reassignment.")
     transition_incident_cmd.add_argument("--followup-eval-path", default="", help="Optional linked follow-up eval artifact path.")
+    link_incident_followup_eval_cmd = subparsers.add_parser(
+        "link-incident-followup-eval",
+        help="Link an existing follow-up eval artifact to an incident without forcing a status transition.",
+    )
+    link_incident_followup_eval_cmd.add_argument("incident_id", help="Incident identifier.")
+    link_incident_followup_eval_cmd.add_argument("--path", required=True, help="Follow-up eval artifact path.")
+    link_incident_followup_eval_cmd.add_argument("--by", required=True, help="Operator identity.")
+    link_incident_followup_eval_cmd.add_argument("--note", default="", help="Optional note explaining the linkage.")
 
     list_incidents_cmd = subparsers.add_parser("list-incidents", help="List recorded incidents with optional status or severity filtering.")
     list_incidents_cmd.add_argument("--status", default="", choices=["", "open", "acknowledged", "contained", "resolved", "closed"], help="Optional status filter.")
@@ -453,6 +463,24 @@ def cmd_transition_incident(
     return 0
 
 
+def cmd_link_incident_followup_eval(
+    incident_id: str,
+    followup_eval_path: str,
+    actor: str,
+    note: str,
+) -> int:
+    settings = load_settings()
+    record = link_incident_followup_eval(
+        incident_id,
+        followup_eval_path=followup_eval_path,
+        actor=actor,
+        note=note,
+        ledger_path=settings.incident_ledger_path,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
 def cmd_list_incidents(status: str, severity: str, limit: int) -> int:
     settings = load_settings()
     rows = list_incidents(
@@ -484,6 +512,8 @@ def _render_incident_markdown(record: dict, *, title: str) -> str:
         f"- Release: {_markdown_cell(record.get('release_name'))}",
         f"- Source Report: {_markdown_cell(record.get('source_report_path'))}",
         f"- Follow-up Eval: {_markdown_cell(record.get('followup_eval_path'))}",
+        f"- Follow-up Eval Linked At: {_markdown_cell(record.get('followup_eval_linked_at'))}",
+        f"- Follow-up Eval Linked By: {_markdown_cell(record.get('followup_eval_linked_by'))}",
         f"- Created At: {_markdown_cell(record.get('created_at'))}",
         f"- Last Updated At: {_markdown_cell(record.get('last_updated_at'))}",
         "",
@@ -576,11 +606,24 @@ def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
             encoding="utf-8",
         )
 
+    followup_eval_bundle_path = None
+    followup_eval_path = incident_record.get("followup_eval_path")
+    if followup_eval_path:
+        candidate_path = Path(followup_eval_path)
+        if candidate_path.exists() and candidate_path.is_file():
+            followup_dir = bundle_dir / "followup-eval"
+            followup_dir.mkdir(parents=True, exist_ok=True)
+            followup_eval_bundle_path = followup_dir / candidate_path.name
+            shutil.copy2(candidate_path, followup_eval_bundle_path)
+
     manifest = {
         "incident": incident_record,
         "incident_report_path": str(incident_report_path),
         "source_report_path": incident_record.get("source_report_path"),
         "followup_eval_path": incident_record.get("followup_eval_path"),
+        "followup_eval_linked_at": incident_record.get("followup_eval_linked_at"),
+        "followup_eval_linked_by": incident_record.get("followup_eval_linked_by"),
+        "followup_eval_bundle_path": str(followup_eval_bundle_path) if followup_eval_bundle_path else None,
         "release_record": release_record,
         "related_handoff_snapshot_path": str(handoff_snapshot_path) if handoff_snapshot_path else None,
         "related_handoff_report_path": str(handoff_report_path) if handoff_report_path else None,
@@ -594,6 +637,7 @@ def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
                 "incident_id": incident_id,
                 "bundle_manifest": str(manifest_path),
                 "incident_report_path": str(incident_report_path),
+                "followup_eval_bundle_path": str(followup_eval_bundle_path) if followup_eval_bundle_path else None,
                 "handoff_report_path": str(handoff_report_path) if handoff_report_path else None,
             },
             indent=2,
@@ -1793,6 +1837,8 @@ def main() -> int:
         return cmd_open_incident(args.severity, args.summary, args.owner, args.environment, args.release_name, args.source_report, args.note)
     if args.command == "transition-incident":
         return cmd_transition_incident(args.incident_id, args.status, args.by, args.note, args.owner, args.followup_eval_path)
+    if args.command == "link-incident-followup-eval":
+        return cmd_link_incident_followup_eval(args.incident_id, args.path, args.by, args.note)
     if args.command == "list-incidents":
         return cmd_list_incidents(args.status, args.severity, args.limit)
     if args.command == "incident-status":
