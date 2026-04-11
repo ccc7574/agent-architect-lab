@@ -1849,7 +1849,7 @@ def cmd_export_release_command_brief(
     output: str,
     title: str,
 ) -> int:
-    brief, output_path = export_release_command_brief(
+    brief, output_path, json_path = export_release_command_brief(
         release_name,
         environments=environments or None,
         history_limit=history_limit,
@@ -1859,6 +1859,7 @@ def cmd_export_release_command_brief(
     )
     payload = brief.to_dict()
     payload["output_path"] = str(output_path)
+    payload["json_path"] = str(json_path)
     print(json.dumps(payload, indent=2))
     return 0 if brief.recommended_action in {"promote", "promote_with_review"} else 1
 

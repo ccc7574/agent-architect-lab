@@ -14,6 +14,7 @@ from agent_architect_lab.cli import (
     cmd_backup_release_and_incident_ledgers,
     cmd_backup_control_plane_storage,
     cmd_control_plane_storage_status,
+    cmd_export_release_command_brief,
     cmd_ledger_storage_status,
     cmd_approve_release,
     cmd_open_incident,
@@ -21,6 +22,7 @@ from agent_architect_lab.cli import (
     cmd_restore_release_and_incident_ledger_backup,
     cmd_restore_control_plane_backup,
     cmd_run_evals,
+    cmd_run_planner_shadow,
     cmd_run_release_shadow,
     cmd_verify_release_and_incident_ledger_backup,
     cmd_verify_control_plane_backup,
@@ -679,6 +681,23 @@ def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, t
 def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     _seed_release_state()
+    with redirect_stdout(io.StringIO()):
+        cmd_run_planner_shadow(
+            "planner_shadow",
+            "planner-shadow-preseed.json",
+            [],
+            [],
+            str(tmp_path / "planner-shadow-preseed.md"),
+            "Preseed Planner Shadow",
+        )
+        cmd_export_release_command_brief(
+            "release-a",
+            [],
+            5,
+            10,
+            str(tmp_path / "release-command-preseed.md"),
+            "Preseed Release Brief",
+        )
     settings = load_settings()
     server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -745,7 +764,11 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         assert create_payload["status"] == "queued"
         assert status_payload["status"] == "succeeded"
         assert Path(status_payload["result_payload"]["saved_to"]).exists()
-        assert "Async Governance Summary" in Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        assert "Async Governance Summary" in markdown
+        assert "## Runtime Realism" in markdown
+        assert "planner-shadow-preseed.json" in markdown
+        assert "release-a" in markdown
         assert audit_response.status == 200
         assert audit_payload["rows"]
     finally:
@@ -890,6 +913,139 @@ def test_control_plane_server_runs_release_runbook_export_job(monkeypatch, tmp_p
         assert "Async Release Runbook" in markdown
         assert "## Execution Plan" in markdown
         assert "release-status release-a" in markdown
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_runs_planner_shadow_export_job(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-planner-shadow",
+            body=json.dumps(
+                {
+                    "title": "Async Planner Shadow",
+                    "output": str(tmp_path / "async-planner-shadow.md"),
+                    "report_name": "async-planner-shadow.json",
+                    "suite_name": "planner_shadow",
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-planner-shadow-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] in {"succeeded", "failed"}:
+                break
+        connection.close()
+
+        assert create_response.status == 202
+        assert status_payload["status"] == "succeeded"
+        assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        assert Path(status_payload["result_payload"]["report_path"]).exists()
+        markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        assert "Async Planner Shadow" in markdown
+        assert "## Tasks" in markdown
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_runs_release_command_brief_export_job(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-release-command-brief",
+            body=json.dumps(
+                {
+                    "release_name": "release-a",
+                    "title": "Async Release Command Brief",
+                    "output": str(tmp_path / "async-release-command-brief.md"),
+                    "history_limit": 5,
+                    "incident_limit": 5,
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-release-command-brief-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] in {"succeeded", "failed"}:
+                break
+        connection.close()
+
+        assert create_response.status == 202
+        assert status_payload["status"] == "succeeded"
+        assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        assert Path(status_payload["result_payload"]["json_path"]).exists()
+        markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        assert "Async Release Command Brief" in markdown
+        assert "## Handoffs" in markdown
+        assert "release-manager" in markdown
     finally:
         server.shutdown()
         server.server_close()

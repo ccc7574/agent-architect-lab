@@ -17,6 +17,8 @@ from agent_architect_lab.control_plane.maintenance import (
 from agent_architect_lab.control_plane.reporting import (
     export_governance_summary_report,
     export_operator_handoff_report,
+    export_planner_shadow_report,
+    export_release_command_brief_report,
     export_release_runbook_report,
     export_weekly_status_report,
     record_operator_handoff_snapshot,
@@ -362,6 +364,8 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "export_weekly_status": _handle_export_weekly_status,
         "record_operator_handoff": _handle_record_operator_handoff,
         "export_operator_handoff_report": _handle_export_operator_handoff_report,
+        "export_planner_shadow": _handle_export_planner_shadow,
+        "export_release_command_brief": _handle_export_release_command_brief,
         "export_release_runbook": _handle_export_release_runbook,
         "backup_control_plane_storage": _handle_backup_control_plane_storage,
         "verify_control_plane_backup": _handle_verify_control_plane_backup,
@@ -414,6 +418,30 @@ def _handle_export_operator_handoff_report(settings: Settings, payload: JobPaylo
         settings,
         snapshot=str(payload.get("snapshot", "")),
         latest=bool(payload.get("latest", False)),
+        output=str(payload.get("output", "")),
+        title=str(payload.get("title", "")),
+    )
+
+
+def _handle_export_planner_shadow(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return export_planner_shadow_report(
+        settings,
+        suite_name=str(payload.get("suite_name", "planner_shadow") or "planner_shadow"),
+        report_name=str(payload.get("report_name", "planner-shadow-report.json") or "planner-shadow-report.json"),
+        allowed_tools=list(payload.get("allowed_tools", [])),
+        blocked_tools=list(payload.get("blocked_tools", [])),
+        markdown_output=str(payload.get("output", "")),
+        title=str(payload.get("title", "")),
+    )
+
+
+def _handle_export_release_command_brief(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return export_release_command_brief_report(
+        settings,
+        release_name=str(payload.get("release_name", "")),
+        environments=list(payload.get("environments", [])),
+        history_limit=int(payload.get("history_limit", 5)),
+        incident_limit=int(payload.get("incident_limit", 10)),
         output=str(payload.get("output", "")),
         title=str(payload.get("title", "")),
     )

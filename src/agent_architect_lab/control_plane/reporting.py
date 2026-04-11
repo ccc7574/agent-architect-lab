@@ -6,6 +6,7 @@ from pathlib import Path
 from re import sub
 from typing import Any
 
+from agent_architect_lab.agent.orchestration import export_release_command_brief
 from agent_architect_lab.config import Settings
 from agent_architect_lab.harness.incidents import get_incident_review_board, list_incidents
 from agent_architect_lab.harness.ledger import (
@@ -21,7 +22,43 @@ from agent_architect_lab.harness.ledger import (
     list_active_overrides,
     list_releases,
 )
+from agent_architect_lab.harness.planner_shadow import (
+    export_planner_shadow_markdown,
+    run_planner_shadow_suite,
+)
+from agent_architect_lab.llm.factory import create_planner_provider
 from agent_architect_lab.models import utc_now_iso
+
+
+def build_runtime_realism_payload(settings: Settings) -> dict[str, Any]:
+    planner_shadow_reports = _load_runtime_json_artifacts(
+        settings.reports_dir.glob("planner-shadow*.json"),
+        required_keys={"suite_name", "candidate_provider", "policy_pass_rate"},
+    )
+    release_command_briefs = _load_runtime_json_artifacts(
+        settings.reports_dir.glob("release-command-*.json"),
+        required_keys={"release_name", "pattern", "recommended_action"},
+    )
+    latest_planner_shadow = planner_shadow_reports[0] if planner_shadow_reports else None
+    latest_release_command_brief = release_command_briefs[0] if release_command_briefs else None
+    return {
+        "latest_planner_shadow": latest_planner_shadow,
+        "latest_release_command_brief": latest_release_command_brief,
+        "planner_shadow_reports": planner_shadow_reports[:10],
+        "release_command_briefs": release_command_briefs[:10],
+        "metrics": {
+            "planner_shadow_report_count": len(planner_shadow_reports),
+            "release_command_brief_count": len(release_command_briefs),
+            "latest_planner_shadow_passed": (
+                latest_planner_shadow.get("all_passed") if isinstance(latest_planner_shadow, dict) else None
+            ),
+            "latest_release_command_action": (
+                latest_release_command_brief.get("recommended_action")
+                if isinstance(latest_release_command_brief, dict)
+                else None
+            ),
+        },
+    }
 
 
 def build_governance_summary_payload(
@@ -85,6 +122,7 @@ def build_governance_summary_payload(
         if row.status not in {"resolved", "closed"}
     ]
     releases = [row.to_dict() for row in list_releases(ledger_path=settings.release_ledger_path)]
+    runtime_realism = build_runtime_realism_payload(settings)
     return {
         "generated_at": utc_now_iso(),
         "environments": selected_environments,
@@ -95,6 +133,7 @@ def build_governance_summary_payload(
         "active_incidents": active_incidents,
         "active_overrides": active_overrides,
         "releases": releases,
+        "runtime_realism": runtime_realism,
         "metrics": {
             "recorded_release_count": len(releases),
             "high_risk_release_count": len(
@@ -117,6 +156,8 @@ def build_governance_summary_payload(
                     if row.get("status") in {"expired", "expiring_soon"}
                 ]
             ),
+            "planner_shadow_report_count": runtime_realism["metrics"]["planner_shadow_report_count"],
+            "release_command_brief_count": runtime_realism["metrics"]["release_command_brief_count"],
         },
     }
 
@@ -397,6 +438,71 @@ def export_release_runbook_report(
         "release_name": release_name,
         "environments": payload["environments"],
         "step_count": len(payload["execution_plan"]),
+    }
+
+
+def export_planner_shadow_report(
+    settings: Settings,
+    *,
+    suite_name: str,
+    report_name: str,
+    allowed_tools: list[str],
+    blocked_tools: list[str],
+    markdown_output: str,
+    title: str,
+) -> dict[str, Any]:
+    provider = create_planner_provider(settings)
+    report = run_planner_shadow_suite(
+        suite_name,
+        provider,
+        allowed_tools=allowed_tools,
+        blocked_tools=blocked_tools,
+        settings=settings,
+    )
+    report_path = settings.reports_dir / report_name
+    report.save(report_path)
+    markdown_path = export_planner_shadow_markdown(
+        report,
+        output=markdown_output,
+        title=title or "Planner Shadow Report",
+    )
+    return {
+        "saved_to": str(markdown_path),
+        "report_path": str(report_path),
+        "title": title.strip() or "Planner Shadow Report",
+        "suite_name": report.suite_name,
+        "candidate_provider": report.candidate_provider,
+        "policy_pass_rate": report.policy_pass_rate,
+        "all_passed": report.all_passed,
+    }
+
+
+def export_release_command_brief_report(
+    settings: Settings,
+    *,
+    release_name: str,
+    environments: list[str],
+    history_limit: int,
+    incident_limit: int,
+    output: str,
+    title: str,
+) -> dict[str, Any]:
+    brief, output_path, json_path = export_release_command_brief(
+        release_name,
+        environments=environments or settings.environment_names,
+        history_limit=history_limit,
+        incident_limit=incident_limit,
+        output=output,
+        title=title or "Release Command Brief",
+        settings=settings,
+    )
+    return {
+        "saved_to": str(output_path),
+        "json_path": str(json_path),
+        "title": title.strip() or "Release Command Brief",
+        "release_name": brief.release_name,
+        "pattern": brief.pattern,
+        "recommended_action": brief.recommended_action,
     }
 
 
@@ -696,6 +802,9 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
     active_incidents = payload.get("active_incidents", [])
     releases = payload.get("releases", [])
     metrics = payload.get("metrics", {})
+    runtime_realism = payload.get("runtime_realism", {})
+    latest_planner_shadow = runtime_realism.get("latest_planner_shadow") or {}
+    latest_release_command_brief = runtime_realism.get("latest_release_command_brief") or {}
     lines = [
         f"# {title}",
         "",
@@ -718,6 +827,34 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
                 ["Critical incidents", metrics.get("critical_incident_count")],
                 ["Active overrides", metrics.get("active_override_count")],
                 ["Expired or expiring overrides", metrics.get("urgent_override_count")],
+                ["Planner shadow reports", metrics.get("planner_shadow_report_count")],
+                ["Release command briefs", metrics.get("release_command_brief_count")],
+            ],
+        )
+    )
+    lines.extend(["", "## Runtime Realism", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Artifact", "Key Fields"],
+            [
+                [
+                    "Latest planner shadow",
+                    [
+                        latest_planner_shadow.get("file_name"),
+                        latest_planner_shadow.get("candidate_provider"),
+                        latest_planner_shadow.get("policy_pass_rate"),
+                        latest_planner_shadow.get("all_passed"),
+                    ],
+                ],
+                [
+                    "Latest release command brief",
+                    [
+                        latest_release_command_brief.get("file_name"),
+                        latest_release_command_brief.get("release_name"),
+                        latest_release_command_brief.get("recommended_action"),
+                        latest_release_command_brief.get("pattern"),
+                    ],
+                ],
             ],
         )
     )
@@ -1006,6 +1143,9 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
     window = payload.get("window", {})
     current_governance = payload.get("current_governance", {})
     metrics = current_governance.get("metrics", {})
+    runtime_realism = current_governance.get("runtime_realism", {})
+    latest_planner_shadow = runtime_realism.get("latest_planner_shadow") or {}
+    latest_release_command_brief = runtime_realism.get("latest_release_command_brief") or {}
     patterns = payload.get("historical_patterns", {})
     recent_handoffs = payload.get("recent_handoffs", [])
 
@@ -1032,6 +1172,34 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
                 ["Critical incidents", metrics.get("critical_incident_count")],
                 ["Active overrides", metrics.get("active_override_count")],
                 ["Urgent overrides", metrics.get("urgent_override_count")],
+                ["Planner shadow reports", metrics.get("planner_shadow_report_count")],
+                ["Release command briefs", metrics.get("release_command_brief_count")],
+            ],
+        )
+    )
+    lines.extend(["", "## Latest Runtime Realism", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Artifact", "Key Fields"],
+            [
+                [
+                    "Planner shadow",
+                    [
+                        latest_planner_shadow.get("file_name"),
+                        latest_planner_shadow.get("candidate_provider"),
+                        latest_planner_shadow.get("policy_pass_rate"),
+                        latest_planner_shadow.get("all_passed"),
+                    ],
+                ],
+                [
+                    "Release command brief",
+                    [
+                        latest_release_command_brief.get("file_name"),
+                        latest_release_command_brief.get("release_name"),
+                        latest_release_command_brief.get("recommended_action"),
+                        latest_release_command_brief.get("pattern"),
+                    ],
+                ],
             ],
         )
     )
@@ -1094,6 +1262,27 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
     )
     lines.append("")
     return "\n".join(lines)
+
+
+def _load_runtime_json_artifacts(paths, *, required_keys: set[str]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not required_keys.issubset(set(payload)):
+            continue
+        generated_at = str(payload.get("generated_at") or payload.get("created_at") or "")
+        payload = dict(payload)
+        payload["file_name"] = path.name
+        payload["path"] = str(path)
+        payload["_sort_key"] = generated_at or path.name
+        records.append(payload)
+    records.sort(key=lambda item: str(item.get("_sort_key", "")), reverse=True)
+    for record in records:
+        record.pop("_sort_key", None)
+    return records
 
 
 def _build_release_runbook_steps(

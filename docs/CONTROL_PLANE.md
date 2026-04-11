@@ -114,6 +114,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/export-weekly-status`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
+- `POST /jobs/export-planner-shadow`
+- `POST /jobs/export-release-command-brief`
 - `POST /jobs/export-release-runbook`
 - `POST /jobs/backup-control-plane-storage`
 - `POST /jobs/verify-control-plane-backup`
@@ -273,6 +275,45 @@ curl \
   }'
 ```
 
+Queue a planner shadow export job:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-planner-shadow-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-planner-shadow \
+  -d '{
+    "suite_name": "planner_shadow",
+    "report_name": "planner-shadow-report.json",
+    "title": "Planner Shadow Report",
+    "output": "/tmp/planner-shadow.md"
+  }'
+```
+
+Queue a bounded release command brief export job:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-release-command-brief-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-release-command-brief \
+  -d '{
+    "release_name": "2026-04-10-main",
+    "title": "Release Command Brief",
+    "output": "/tmp/release-command-brief.md",
+    "history_limit": 5,
+    "incident_limit": 10
+  }'
+```
+
 Queue a release runbook export job:
 
 ```bash
@@ -319,6 +360,16 @@ curl \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/jobs/job-abc123def456
 ```
+
+## Runtime Realism In Governance Views
+
+`GET /governance-summary` and the Markdown exports built from it now also surface:
+
+- the latest planner shadow artifact
+- the latest release command brief artifact
+- simple counts for both runtime-realism artifact types
+
+This keeps manager-facing governance output aware of model-backed planner validation and bounded role-handoff readiness instead of only classical release and incident state.
 
 Retry a failed job after its dependency is restored:
 

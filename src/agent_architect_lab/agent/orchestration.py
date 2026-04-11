@@ -329,7 +329,7 @@ def export_release_command_brief(
     output: str = "",
     title: str = "Release Command Brief",
     settings: Settings | None = None,
-) -> tuple[ReleaseCommandBrief, Path]:
+) -> tuple[ReleaseCommandBrief, Path, Path]:
     resolved_settings = settings or load_settings()
     brief = build_release_command_brief(
         release_name,
@@ -341,7 +341,9 @@ def export_release_command_brief(
     output_path = Path(output) if output else resolved_settings.reports_dir / f"release-command-{release_name}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_release_command_brief_markdown(brief, title=title), encoding="utf-8")
-    return brief, output_path
+    json_path = output_path.with_suffix(".json")
+    brief.save_json(json_path)
+    return brief, output_path, json_path
 
 
 def _dedupe(values: list[str]) -> list[str]:

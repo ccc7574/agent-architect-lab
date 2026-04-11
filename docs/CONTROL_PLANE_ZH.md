@@ -114,6 +114,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/export-weekly-status`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
+- `POST /jobs/export-planner-shadow`
+- `POST /jobs/export-release-command-brief`
 - `POST /jobs/export-release-runbook`
 - `POST /jobs/backup-control-plane-storage`
 - `POST /jobs/verify-control-plane-backup`
@@ -273,6 +275,45 @@ curl \
   }'
 ```
 
+创建 planner shadow 导出任务：
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-planner-shadow-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-planner-shadow \
+  -d '{
+    "suite_name": "planner_shadow",
+    "report_name": "planner-shadow-report.json",
+    "title": "Planner Shadow Report",
+    "output": "/tmp/planner-shadow.md"
+  }'
+```
+
+创建 bounded release command brief 导出任务：
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-release-command-brief-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-release-command-brief \
+  -d '{
+    "release_name": "2026-04-10-main",
+    "title": "Release Command Brief",
+    "output": "/tmp/release-command-brief.md",
+    "history_limit": 5,
+    "incident_limit": 10
+  }'
+```
+
 创建 release runbook 导出任务：
 
 ```bash
@@ -319,6 +360,16 @@ curl \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/jobs/job-abc123def456
 ```
+
+## 治理摘要中的 Runtime Realism
+
+`GET /governance-summary` 以及基于它生成的 Markdown 报告现在还会带出：
+
+- 最新的 planner shadow artifact
+- 最新的 release command brief artifact
+- 这两类 runtime-realism artifact 的简单计数
+
+这样管理层视角的治理输出就不再只看到传统的 release / incident 状态，也能看到 model-backed planner validation 和 bounded role-handoff readiness。
 
 依赖恢复后重试失败任务：
 
