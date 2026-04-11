@@ -160,8 +160,15 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /operator-alert-board?environment=production&alert_limit=20`
 - `GET /storage-status`
 - `GET /ledger-storage-status`
+- `GET /environments/{environment}/status`
+- `GET /environments/{environment}/history?limit=20`
+- `GET /environments/{environment}/deploy-policy`
+- `GET /active-overrides?release_name=...&environment=...&limit=50`
+- `GET /rollout-matrix?environment=staging&environment=production&release_name=...`
 - `GET /releases?limit=50`
 - `GET /releases/{release_name}`
+- `GET /releases/{release_name}/readiness-digest?environment=production`
+- `GET /releases/{release_name}/deploy-readiness?environment=production`
 - `GET /feedback?release_name=...&incident_id=...&target_kind=...&limit=20`
 - `GET /feedback-summary?release_name=...&incident_id=...&target_kind=...&limit=20`
 - `GET /release-risk-board?environment=staging&environment=production&limit=20`
@@ -255,6 +262,22 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/operator-alert-board?alert_limit=10
+```
+
+Inspect deploy policy and readiness for a production rollout:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/environments/production/deploy-policy
+
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  "http://127.0.0.1:8080/releases/release-a/deploy-readiness?environment=production"
 ```
 
 Inspect failed jobs in the dead-letter operational view:

@@ -211,6 +211,57 @@ def test_control_plane_app_requires_identity_for_governance_routes(monkeypatch, 
     assert audit_query.payload["rows"][0]["error_code"] == "missing_identity"
 
 
+def test_control_plane_app_exposes_release_read_surfaces(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    app = _build_app(settings)
+
+    environment_status = app.handle_request(
+        "GET",
+        "/environments/production/status",
+        _request_headers("reader-token", actor="release-manager-1", role="release-manager"),
+        b"",
+    )
+    active_overrides = app.handle_request(
+        "GET",
+        "/active-overrides?limit=10",
+        _request_headers("reader-token", actor="release-manager-1", role="release-manager"),
+        b"",
+    )
+    readiness_digest = app.handle_request(
+        "GET",
+        "/releases/release-a/readiness-digest?environment=production",
+        _request_headers("reader-token", actor="release-manager-1", role="release-manager"),
+        b"",
+    )
+    rollout_matrix = app.handle_request(
+        "GET",
+        "/rollout-matrix?environment=production&release_name=release-a",
+        _request_headers("reader-token", actor="release-manager-1", role="release-manager"),
+        b"",
+    )
+    deploy_readiness = app.handle_request(
+        "GET",
+        "/releases/release-a/deploy-readiness?environment=production",
+        _request_headers("reader-token", actor="release-manager-1", role="release-manager"),
+        b"",
+    )
+
+    assert environment_status.status_code == 200
+    assert environment_status.payload["environment"] == "production"
+    assert active_overrides.status_code == 200
+    assert active_overrides.payload["rows"] == []
+    assert readiness_digest.status_code == 200
+    assert readiness_digest.payload["release_name"] == "release-a"
+    assert rollout_matrix.status_code == 200
+    assert rollout_matrix.payload["release_name"] == "release-a"
+    assert rollout_matrix.payload["rows"][0]["environment"] == "production"
+    assert deploy_readiness.status_code == 200
+    assert deploy_readiness.payload["release_name"] == "release-a"
+    assert deploy_readiness.payload["environment"] == "production"
+
+
 def test_control_plane_app_rejects_forbidden_role(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
@@ -1244,6 +1295,71 @@ def test_control_plane_server_exposes_metrics_snapshot(monkeypatch, tmp_path: Pa
         assert payload["jobs"]["counts_by_status"]["queued"] == 1
         assert payload["workers"]["totals"]["workers"] == 1
         assert payload["worker_process"]["managed_by_server"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_exposes_release_read_surfaces(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        headers = _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        )
+        connection.request("GET", "/environments/production/status", headers=headers)
+        environment_status_response = connection.getresponse()
+        environment_status_payload = json.loads(environment_status_response.read().decode("utf-8"))
+
+        connection.request("GET", "/environments/production/history?limit=10", headers=headers)
+        environment_history_response = connection.getresponse()
+        environment_history_payload = json.loads(environment_history_response.read().decode("utf-8"))
+
+        connection.request("GET", "/environments/production/deploy-policy", headers=headers)
+        deploy_policy_response = connection.getresponse()
+        deploy_policy_payload = json.loads(deploy_policy_response.read().decode("utf-8"))
+
+        connection.request("GET", "/releases/release-a/readiness-digest?environment=production", headers=headers)
+        readiness_digest_response = connection.getresponse()
+        readiness_digest_payload = json.loads(readiness_digest_response.read().decode("utf-8"))
+
+        connection.request("GET", "/releases/release-a/deploy-readiness?environment=production", headers=headers)
+        deploy_readiness_response = connection.getresponse()
+        deploy_readiness_payload = json.loads(deploy_readiness_response.read().decode("utf-8"))
+
+        connection.request("GET", "/rollout-matrix?environment=production&release_name=release-a", headers=headers)
+        rollout_matrix_response = connection.getresponse()
+        rollout_matrix_payload = json.loads(rollout_matrix_response.read().decode("utf-8"))
+
+        connection.request("GET", "/active-overrides?limit=10", headers=headers)
+        active_overrides_response = connection.getresponse()
+        active_overrides_payload = json.loads(active_overrides_response.read().decode("utf-8"))
+        connection.close()
+
+        assert environment_status_response.status == 200
+        assert environment_status_payload["environment"] == "production"
+        assert environment_history_response.status == 200
+        assert environment_history_payload["rows"] == []
+        assert deploy_policy_response.status == 200
+        assert deploy_policy_payload["environment"] == "production"
+        assert readiness_digest_response.status == 200
+        assert readiness_digest_payload["release_name"] == "release-a"
+        assert deploy_readiness_response.status == 200
+        assert deploy_readiness_payload["environment"] == "production"
+        assert rollout_matrix_response.status == 200
+        assert rollout_matrix_payload["release_name"] == "release-a"
+        assert active_overrides_response.status == 200
+        assert active_overrides_payload["rows"] == []
     finally:
         server.shutdown()
         server.server_close()

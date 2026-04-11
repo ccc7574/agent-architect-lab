@@ -44,11 +44,18 @@ from agent_architect_lab.harness.incidents import (
 )
 from agent_architect_lab.harness.ledger_maintenance import build_ledger_storage_status
 from agent_architect_lab.harness.ledger import (
+    check_deploy_readiness,
+    get_deploy_policy,
+    get_environment_history,
+    get_environment_status,
     deploy_release,
+    get_rollout_matrix,
     get_release_record,
+    get_release_readiness_digest,
     get_approval_review_board,
     get_release_risk_board,
     grant_release_override,
+    list_active_overrides,
     list_releases,
     revoke_release_override,
     rollback_release,
@@ -275,6 +282,72 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(ControlPlaneResponse(200, build_ledger_storage_status(self.settings)))
+            environment_status_match = re.fullmatch(r"/environments/([^/]+)/status", path)
+            if method == "GET" and environment_status_match is not None:
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = get_environment_status(
+                    environment_status_match.group(1),
+                    ledger_path=self.settings.release_ledger_path,
+                ).to_dict()
+                return respond(ControlPlaneResponse(200, payload))
+            environment_history_match = re.fullmatch(r"/environments/([^/]+)/history", path)
+            if method == "GET" and environment_history_match is not None:
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                rows = [
+                    row.to_dict()
+                    for row in get_environment_history(
+                        environment_history_match.group(1),
+                        ledger_path=self.settings.release_ledger_path,
+                        limit=_query_int(query, "limit", default=20, minimum=1),
+                    )
+                ]
+                return respond(ControlPlaneResponse(200, {"rows": rows, "total": len(rows)}))
+            deploy_policy_match = re.fullmatch(r"/environments/([^/]+)/deploy-policy", path)
+            if method == "GET" and deploy_policy_match is not None:
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = get_deploy_policy(
+                    deploy_policy_match.group(1),
+                    ledger_path=self.settings.release_ledger_path,
+                    production_soak_minutes=self.settings.production_soak_minutes,
+                    required_approver_roles=self.settings.production_required_approver_roles,
+                    environment_policies=self.settings.environment_policies,
+                    environment_freeze_windows=self.settings.environment_freeze_windows,
+                ).to_dict()
+                return respond(ControlPlaneResponse(200, payload))
+            if method == "GET" and path == "/active-overrides":
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                rows = [
+                    row.to_dict()
+                    for row in list_active_overrides(
+                        ledger_path=self.settings.release_ledger_path,
+                        release_name=_query_optional_string(query, "release_name"),
+                        environment=_query_optional_string(query, "environment"),
+                        limit=_query_int(query, "limit", default=50, minimum=1),
+                    )
+                ]
+                return respond(ControlPlaneResponse(200, {"rows": rows, "total": len(rows)}))
+            if method == "GET" and path == "/rollout-matrix":
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = get_rollout_matrix(
+                    _query_environments(query, self.settings),
+                    ledger_path=self.settings.release_ledger_path,
+                    release_name=_query_optional_string(query, "release_name"),
+                    production_soak_minutes=self.settings.production_soak_minutes,
+                    required_approver_roles=self.settings.production_required_approver_roles,
+                    environment_policies=self.settings.environment_policies,
+                    environment_freeze_windows=self.settings.environment_freeze_windows,
+                ).to_dict()
+                return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/release-risk-board":
                 _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
@@ -385,6 +458,38 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 payload = get_release_record(release_match.group(1), ledger_path=self.settings.release_ledger_path).to_dict()
+                return respond(ControlPlaneResponse(200, payload))
+            release_readiness_match = re.fullmatch(r"/releases/([^/]+)/readiness-digest", path)
+            if method == "GET" and release_readiness_match is not None:
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = get_release_readiness_digest(
+                    release_readiness_match.group(1),
+                    environments=_query_environments(query, self.settings),
+                    ledger_path=self.settings.release_ledger_path,
+                    production_soak_minutes=self.settings.production_soak_minutes,
+                    required_approver_roles=self.settings.production_required_approver_roles,
+                    environment_policies=self.settings.environment_policies,
+                    environment_freeze_windows=self.settings.environment_freeze_windows,
+                    override_expiring_soon_minutes=self.settings.override_expiring_soon_minutes,
+                ).to_dict()
+                return respond(ControlPlaneResponse(200, payload))
+            deploy_readiness_match = re.fullmatch(r"/releases/([^/]+)/deploy-readiness", path)
+            if method == "GET" and deploy_readiness_match is not None:
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                environment = _query_required_string(query, "environment")
+                payload = check_deploy_readiness(
+                    deploy_readiness_match.group(1),
+                    environment=environment,
+                    ledger_path=self.settings.release_ledger_path,
+                    production_soak_minutes=self.settings.production_soak_minutes,
+                    required_approver_roles=self.settings.production_required_approver_roles,
+                    environment_policies=self.settings.environment_policies,
+                    environment_freeze_windows=self.settings.environment_freeze_windows,
+                ).to_dict()
                 return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/jobs":
                 _authorization, auth_error = authorize("read", "read_jobs")
@@ -1858,6 +1963,13 @@ def _query_optional_string(
         raise ValueError(
             f"Query parameter '{key}' must be one of: {', '.join(sorted(allowed))}."
         )
+    return value
+
+
+def _query_required_string(query: Mapping[str, list[str]], key: str) -> str:
+    value = _query_optional_string(query, key)
+    if value is None:
+        raise ValueError(f"Query parameter '{key}' is required.")
     return value
 
 
