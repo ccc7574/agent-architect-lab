@@ -41,6 +41,7 @@ class Settings:
     control_plane_job_poll_interval_s: float
     control_plane_job_lease_ttl_s: float
     control_plane_job_heartbeat_interval_s: float
+    control_plane_worker_stale_after_s: float
     planner_provider: str
     planner_model: str
     planner_api_base: str | None
@@ -218,6 +219,9 @@ def load_settings() -> Settings:
     control_plane_job_heartbeat_interval_s = float(
         os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_HEARTBEAT_INTERVAL_S", "1.0")
     )
+    control_plane_worker_stale_after_s = float(
+        os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "15.0")
+    )
     planner_provider = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_PROVIDER", "heuristic").strip().lower()
     planner_model = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_MODEL", "gpt-4.1-mini")
     planner_api_base = os.environ.get("AGENT_ARCHITECT_LAB_PLANNER_API_BASE")
@@ -346,6 +350,7 @@ def load_settings() -> Settings:
         control_plane_job_poll_interval_s=control_plane_job_poll_interval_s,
         control_plane_job_lease_ttl_s=control_plane_job_lease_ttl_s,
         control_plane_job_heartbeat_interval_s=control_plane_job_heartbeat_interval_s,
+        control_plane_worker_stale_after_s=control_plane_worker_stale_after_s,
         planner_provider=planner_provider,
         planner_model=planner_model,
         planner_api_base=planner_api_base,

@@ -1075,7 +1075,124 @@ def test_control_plane_server_exposes_registered_workers(monkeypatch, tmp_path: 
 
         assert response.status == 200
         assert payload["summary"]["totals"]["workers"] >= 1
+        assert payload["summary"]["counts_by_health"]["healthy"] >= 1
         assert any(row["worker_id"] == "worker-http-registry" for row in payload["rows"])
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_filters_stale_workers(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "0.01")
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.workers.heartbeat_worker(
+        worker_id="worker-http-stale",
+        managed_by_server=False,
+        poll_interval_s=0.01,
+        lease_ttl_s=5.0,
+        heartbeat_interval_s=0.01,
+    )
+    time.sleep(0.05)
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "GET",
+            "/workers?health=stale",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.request("GET", "/health")
+        health_response = connection.getresponse()
+        health_payload = json.loads(health_response.read().decode("utf-8"))
+        connection.close()
+
+        assert response.status == 200
+        assert payload["summary"]["totals"]["stale_workers"] == 1
+        assert payload["rows"][0]["worker_id"] == "worker-http-stale"
+        assert payload["rows"][0]["health_status"] == "stale"
+        assert health_response.status == 200
+        assert health_payload["worker_registry"]["stale_workers"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_exposes_dead_letter_jobs(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    job = repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"label": "dead-letter"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-dead-letter-http",
+        operation_id=None,
+        max_attempts=1,
+    )
+    claimed = repositories.jobs.claim_next_job(worker_id="worker-http-dead-letter", lease_ttl_s=5.0)
+    assert claimed is not None
+    repositories.jobs.fail_job(
+        job.job_id,
+        {
+            "code": "job_execution_failed",
+            "message": "backup archive write failed",
+        },
+    )
+
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "GET",
+            "/dead-letter-jobs",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.request(
+            "GET",
+            "/job-queue-status",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        summary_response = connection.getresponse()
+        summary_payload = json.loads(summary_response.read().decode("utf-8"))
+        connection.close()
+
+        assert response.status == 200
+        assert payload["total"] == 1
+        assert payload["counts_by_job_type"]["backup_control_plane_storage"] == 1
+        assert payload["rows"][0]["job_id"] == job.job_id
+        assert payload["rows"][0]["error_code"] == "job_execution_failed"
+        assert summary_response.status == 200
+        assert summary_payload["totals"]["dead_letter_jobs"] == 1
+        assert summary_payload["counts_by_queue_reason"]["failed"] == 1
     finally:
         server.shutdown()
         server.server_close()

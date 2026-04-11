@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from agent_architect_lab.cli import (
     cmd_backup_release_and_incident_ledgers,
     cmd_check_deploy_readiness,
     cmd_control_plane_job_queue_status,
+    cmd_control_plane_dead_letter_jobs,
     cmd_control_plane_workers,
     cmd_environment_history,
     cmd_deploy_policy,
@@ -151,6 +153,7 @@ def test_cmd_control_plane_job_queue_status_summarizes_jobs(monkeypatch, tmp_pat
     assert exit_code == 0
     assert payload["totals"]["jobs"] == 1
     assert payload["totals"]["queued_jobs"] == 1
+    assert payload["totals"]["dead_letter_jobs"] == 0
     assert payload["counts_by_status"]["queued"] == 1
 
 
@@ -173,7 +176,72 @@ def test_cmd_control_plane_workers_lists_worker_registry(monkeypatch, tmp_path: 
 
     assert exit_code == 0
     assert payload["summary"]["totals"]["workers"] == 1
+    assert payload["summary"]["counts_by_health"]["healthy"] == 1
     assert payload["rows"][0]["worker_id"] == "worker-test"
+    assert payload["rows"][0]["health_status"] == "healthy"
+
+
+def test_cmd_control_plane_workers_marks_stale_heartbeats(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "0.01")
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.workers.heartbeat_worker(
+        worker_id="worker-stale",
+        managed_by_server=False,
+        poll_interval_s=0.01,
+        lease_ttl_s=5.0,
+        heartbeat_interval_s=0.01,
+    )
+
+    time.sleep(0.05)
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_control_plane_workers()
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["summary"]["totals"]["stale_workers"] == 1
+    assert payload["rows"][0]["worker_id"] == "worker-stale"
+    assert payload["rows"][0]["health_status"] == "stale"
+
+
+def test_cmd_control_plane_dead_letter_jobs_lists_failed_jobs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    job = repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "backup.zip")},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-dead-letter",
+        operation_id=None,
+        max_attempts=1,
+    )
+    claimed = repositories.jobs.claim_next_job(worker_id="worker-dead-letter", lease_ttl_s=5.0)
+
+    assert claimed is not None
+    repositories.jobs.fail_job(
+        job.job_id,
+        {
+            "code": "job_execution_failed",
+            "message": "backup archive write failed",
+        },
+    )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_control_plane_dead_letter_jobs()
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["total"] == 1
+    assert payload["counts_by_job_type"]["backup_control_plane_storage"] == 1
+    assert payload["rows"][0]["job_id"] == job.job_id
+    assert payload["rows"][0]["dead_letter"] is True
+    assert payload["rows"][0]["error_code"] == "job_execution_failed"
 
 
 def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Path) -> None:

@@ -14,7 +14,11 @@ from agent_architect_lab.control_plane.jobs import (
     _lease_deadline,
 )
 from agent_architect_lab.control_plane.storage import AuditEvent, IdempotencyRecord
-from agent_architect_lab.control_plane.workers import ControlPlaneWorkerRecord, ControlPlaneWorkerRepository
+from agent_architect_lab.control_plane.workers import (
+    ControlPlaneWorkerRecord,
+    ControlPlaneWorkerRepository,
+    summarize_worker_records,
+)
 from agent_architect_lab.models import utc_now_iso
 
 
@@ -630,20 +634,12 @@ class SQLiteControlPlaneWorkerStore(SQLiteRepositoryMixin, ControlPlaneWorkerRep
                 rows = connection.execute(sql, parameters).fetchall()
         return [_worker_from_row(row) for row in rows]
 
-    def summarize_workers(self) -> dict[str, Any]:
-        workers = self.list_workers(limit=1000)
-        counts_by_status: dict[str, int] = {}
-        for worker in workers:
-            counts_by_status[worker.status] = counts_by_status.get(worker.status, 0) + 1
-        return {
-            "generated_at": utc_now_iso(),
-            "totals": {
-                "workers": len(workers),
-                "running_workers": counts_by_status.get("running", 0),
-            },
-            "counts_by_status": dict(sorted(counts_by_status.items())),
-            "workers": [worker.to_dict() for worker in workers[:50]],
-        }
+    def summarize_workers(self, *, now: str | None = None, minimum_stale_after_s: float = 15.0) -> dict[str, Any]:
+        return summarize_worker_records(
+            self.list_workers(limit=1000),
+            now=now or utc_now_iso(),
+            minimum_stale_after_s=minimum_stale_after_s,
+        )
 
 
 def _ensure_sqlite_control_plane_schema(connection: sqlite3.Connection) -> int:

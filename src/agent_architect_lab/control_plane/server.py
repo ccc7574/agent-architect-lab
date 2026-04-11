@@ -10,7 +10,11 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
-from agent_architect_lab.control_plane.jobs import ControlPlaneJobRepository, ControlPlaneJobWorker
+from agent_architect_lab.control_plane.jobs import (
+    ControlPlaneJobRepository,
+    ControlPlaneJobWorker,
+    build_dead_letter_summary,
+)
 from agent_architect_lab.control_plane.maintenance import build_control_plane_storage_status
 from agent_architect_lab.control_plane.policies import (
     AuthorizationContext,
@@ -28,7 +32,7 @@ from agent_architect_lab.control_plane.storage import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
-from agent_architect_lab.control_plane.workers import ControlPlaneWorkerRepository
+from agent_architect_lab.control_plane.workers import ControlPlaneWorkerRepository, build_worker_view
 from agent_architect_lab.harness.feedback import build_feedback_summary, list_feedback, record_feedback
 from agent_architect_lab.harness.incidents import (
     get_incident_review_board,
@@ -132,7 +136,9 @@ class ControlPlaneApp:
                         "status": "ok",
                         "service": "agent-architect-lab-control-plane",
                         "generated_at": utc_now_iso(),
-                        "worker_registry": self.worker_store.summarize_workers()["totals"],
+                        "worker_registry": self.worker_store.summarize_workers(
+                            minimum_stale_after_s=self.settings.control_plane_worker_stale_after_s
+                        )["totals"],
                         "worker": {
                             "alive": self.job_worker.is_alive(),
                             "worker_id": self.job_worker.worker_id,
@@ -175,14 +181,54 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 status = _query_optional_string(query, "status", allowed={"running", "stopped"})
+                health = _query_optional_string(query, "health", allowed={"healthy", "stale", "stopped"})
                 limit = _query_int(query, "limit", default=50, minimum=1)
-                rows = [worker.to_dict() for worker in self.worker_store.list_workers(status=status, limit=limit)]
+                generated_at = utc_now_iso()
+                records = self.worker_store.list_workers(
+                    status=status,
+                    limit=1000 if health is not None else limit,
+                )
+                rows = [
+                    build_worker_view(
+                        worker,
+                        now=generated_at,
+                        minimum_stale_after_s=self.settings.control_plane_worker_stale_after_s,
+                    )
+                    for worker in records
+                ]
+                if health is not None:
+                    rows = [row for row in rows if row["health_status"] == health]
+                rows = rows[:limit]
                 return respond(
                     ControlPlaneResponse(
                         200,
-                        {"rows": rows, "total": len(rows), "summary": self.worker_store.summarize_workers()},
+                        {
+                            "rows": rows,
+                            "total": len(rows),
+                            "summary": self.worker_store.summarize_workers(
+                                now=generated_at,
+                                minimum_stale_after_s=self.settings.control_plane_worker_stale_after_s
+                            ),
+                        },
                     )
                 )
+            if method == "GET" and path == "/dead-letter-jobs":
+                _authorization, auth_error = authorize("read", "read_jobs")
+                if auth_error is not None:
+                    return respond(auth_error)
+                limit = _query_int(query, "limit", default=50, minimum=1)
+                generated_at = utc_now_iso()
+                rows = self.job_store.list_jobs(
+                    status="failed",
+                    limit=1000,
+                    job_type=_query_optional_string(query, "job_type"),
+                    request_id=_query_optional_string(query, "request_id"),
+                    operation_id=_query_optional_string(query, "operation_id"),
+                )
+                payload = build_dead_letter_summary(rows, now=generated_at)
+                payload["rows"] = payload["rows"][:limit]
+                payload["total"] = len(rows)
+                return respond(ControlPlaneResponse(200, payload))
             if method == "GET" and path == "/ledger-storage-status":
                 _authorization, auth_error = authorize("read", "read_storage")
                 if auth_error is not None:

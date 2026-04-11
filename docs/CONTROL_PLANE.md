@@ -50,6 +50,12 @@ To inspect registered workers and their latest heartbeat locally:
 PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-workers
 ```
 
+To inspect failed jobs that currently sit in the dead-letter operational view:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-dead-letter-jobs
+```
+
 The server is stdlib-only and keeps artifact storage exactly where the CLI keeps it.
 
 To switch the control plane to SQLite-backed persistence:
@@ -60,6 +66,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH=/tmp/agent-architect-lab-co
 ```
 
 SQLite schema migrations run automatically on startup. The `/health` response exposes the active storage backend and SQLite schema version.
+
+If you need stricter or looser worker liveness detection, set `AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S`.
 
 ## Authentication
 
@@ -77,6 +85,8 @@ SQLite schema migrations run automatically on startup. The `/health` response ex
 - Long-running exports are persisted in `artifacts/control-plane/job-registry.json`
 - Worker heartbeats are persisted in `artifacts/control-plane/worker-registry.json`
 - Running jobs now also carry `worker_id`, `heartbeat_at`, and `lease_expires_at` so stale leases can be recovered
+- Worker registry views now classify workers as `healthy`, `stale`, or `stopped` based on heartbeat age
+- Failed jobs are now exposed through a dedicated dead-letter operational view while preserving the existing manual retry flow
 - Every API response now includes `_meta.request_id` for correlation
 - Policy rejections now include structured `error.details` metadata for dashboards and audits
 - `/health` now reports whether the worker is server-managed or expected to run externally
@@ -129,7 +139,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
 - `GET /job-queue-status`
-- `GET /workers?status=running&limit=50`
+- `GET /workers?status=running&health=healthy&limit=50`
+- `GET /dead-letter-jobs?job_type=backup_control_plane_storage&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&route_policy_key=read_governance&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
 - `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`
@@ -191,7 +202,17 @@ curl \
   -H "Authorization: Bearer reader-token" \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
-  http://127.0.0.1:8080/workers?status=running
+  http://127.0.0.1:8080/workers?health=stale
+```
+
+Inspect failed jobs in the dead-letter operational view:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/dead-letter-jobs
 ```
 
 Inspect release and incident ledger integrity before a restore drill:

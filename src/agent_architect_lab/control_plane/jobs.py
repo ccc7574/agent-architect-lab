@@ -699,6 +699,7 @@ def _requeue_stale_jobs(registry: ControlPlaneJobRegistry, *, now: str) -> list[
 def _job_summary(jobs: list[ControlPlaneJob], *, now: str) -> dict[str, Any]:
     now_ts = _parse_timestamp(now)
     counts_by_status: dict[str, int] = {}
+    counts_by_queue_reason: dict[str, int] = {}
     running_by_worker: dict[str, dict[str, Any]] = {}
     oldest_queued_at: str | None = None
     stale_running_jobs: list[dict[str, Any]] = []
@@ -706,6 +707,7 @@ def _job_summary(jobs: list[ControlPlaneJob], *, now: str) -> dict[str, Any]:
     running_jobs = 0
     for job in jobs:
         counts_by_status[job.status] = counts_by_status.get(job.status, 0) + 1
+        counts_by_queue_reason[job.queue_reason] = counts_by_queue_reason.get(job.queue_reason, 0) + 1
         if job.status == "queued":
             queued_jobs += 1
             if oldest_queued_at is None or (job.created_at, job.job_id) < (oldest_queued_at, job.job_id):
@@ -745,9 +747,11 @@ def _job_summary(jobs: list[ControlPlaneJob], *, now: str) -> dict[str, Any]:
             "jobs": len(jobs),
             "queued_jobs": queued_jobs,
             "running_jobs": running_jobs,
+            "dead_letter_jobs": counts_by_status.get("failed", 0),
             "stale_running_jobs": len(stale_running_jobs),
         },
         "counts_by_status": dict(sorted(counts_by_status.items())),
+        "counts_by_queue_reason": dict(sorted(counts_by_queue_reason.items())),
         "oldest_queued_at": oldest_queued_at,
         "oldest_queued_age_s": queued_age_s,
         "running_workers": sorted(
@@ -758,4 +762,34 @@ def _job_summary(jobs: list[ControlPlaneJob], *, now: str) -> dict[str, Any]:
             stale_running_jobs,
             key=lambda item: (str(item.get("lease_expires_at") or ""), str(item["job_id"])),
         ),
+    }
+
+
+def build_dead_letter_summary(jobs: list[ControlPlaneJob], *, now: str) -> dict[str, Any]:
+    now_ts = _parse_timestamp(now)
+    counts_by_job_type: dict[str, int] = {}
+    rows: list[dict[str, Any]] = []
+    for job in sorted(jobs, key=lambda item: (item.updated_at, item.job_id), reverse=True):
+        counts_by_job_type[job.job_type] = counts_by_job_type.get(job.job_type, 0) + 1
+        failed_at = job.completed_at or job.updated_at
+        failed_age_s: float | None = None
+        if now_ts is not None:
+            failed_ts = _parse_timestamp(failed_at)
+            if failed_ts is not None:
+                failed_age_s = max(0.0, round((now_ts - failed_ts).total_seconds(), 3))
+        rows.append(
+            {
+                **job.to_dict(),
+                "failed_at": failed_at,
+                "failed_age_s": failed_age_s,
+                "error_code": job.last_error.get("code") if isinstance(job.last_error, dict) else None,
+                "error_message": job.last_error.get("message") if isinstance(job.last_error, dict) else None,
+                "dead_letter": job.status == "failed",
+            }
+        )
+    return {
+        "generated_at": now,
+        "total": len(rows),
+        "counts_by_job_type": dict(sorted(counts_by_job_type.items())),
+        "rows": rows,
     }

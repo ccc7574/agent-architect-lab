@@ -19,6 +19,7 @@ from agent_architect_lab.control_plane.maintenance import (
     restore_control_plane_backup,
     verify_control_plane_backup,
 )
+from agent_architect_lab.control_plane.jobs import build_dead_letter_summary
 from agent_architect_lab.control_plane.reporting import (
     build_operator_handoff_payload,
     export_governance_summary_report,
@@ -28,6 +29,7 @@ from agent_architect_lab.control_plane.reporting import (
 )
 from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.control_plane.server import build_control_plane_app, create_control_plane_server
+from agent_architect_lab.control_plane.workers import build_worker_view
 from agent_architect_lab.evals.tasks import list_available_suites, load_default_suite, load_suite
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.feedback import build_feedback_summary, build_related_feedback, list_feedback, record_feedback
@@ -140,6 +142,10 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_workers_cmd = subparsers.add_parser(
         "control-plane-workers",
         help="List registered control-plane workers and their heartbeat status.",
+    )
+    control_plane_dead_letter_jobs_cmd = subparsers.add_parser(
+        "control-plane-dead-letter-jobs",
+        help="List failed control-plane jobs that currently sit in the dead-letter view.",
     )
     backup_control_plane_storage_cmd = subparsers.add_parser(
         "backup-control-plane-storage",
@@ -980,10 +986,32 @@ def cmd_control_plane_job_queue_status() -> int:
 def cmd_control_plane_workers() -> int:
     settings = load_settings()
     repositories = create_local_control_plane_repositories(settings)
+    generated_at = utc_now_iso()
     payload = {
-        "summary": repositories.workers.summarize_workers(),
-        "rows": [worker.to_dict() for worker in repositories.workers.list_workers(limit=100)],
+        "summary": repositories.workers.summarize_workers(
+            now=generated_at,
+            minimum_stale_after_s=settings.control_plane_worker_stale_after_s,
+        ),
+        "rows": [
+            build_worker_view(
+                worker,
+                now=generated_at,
+                minimum_stale_after_s=settings.control_plane_worker_stale_after_s,
+            )
+            for worker in repositories.workers.list_workers(limit=100)
+        ],
     }
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_control_plane_dead_letter_jobs() -> int:
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    payload = build_dead_letter_summary(
+        repositories.jobs.list_jobs(status="failed", limit=1000),
+        now=utc_now_iso(),
+    )
     print(json.dumps(payload, indent=2))
     return 0
 
@@ -2141,6 +2169,8 @@ def main() -> int:
         return cmd_control_plane_job_queue_status()
     if args.command == "control-plane-workers":
         return cmd_control_plane_workers()
+    if args.command == "control-plane-dead-letter-jobs":
+        return cmd_control_plane_dead_letter_jobs()
     if args.command == "backup-control-plane-storage":
         return cmd_backup_control_plane_storage(args.output, args.label)
     if args.command == "verify-control-plane-backup":

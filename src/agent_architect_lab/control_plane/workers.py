@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol, runtime_checkable
@@ -33,6 +34,12 @@ class ControlPlaneWorkerRecord:
             "lease_ttl_s": self.lease_ttl_s,
             "heartbeat_interval_s": self.heartbeat_interval_s,
         }
+
+    def stale_after_s(self, *, minimum_stale_after_s: float = 15.0) -> float:
+        return max(
+            float(minimum_stale_after_s),
+            max(self.poll_interval_s, self.heartbeat_interval_s) * 3.0,
+        )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ControlPlaneWorkerRecord":
@@ -85,7 +92,7 @@ class ControlPlaneWorkerRepository(Protocol):
 
     def list_workers(self, *, status: str | None = None, limit: int = 50) -> list[ControlPlaneWorkerRecord]: ...
 
-    def summarize_workers(self) -> dict[str, Any]: ...
+    def summarize_workers(self, *, now: str | None = None, minimum_stale_after_s: float = 15.0) -> dict[str, Any]: ...
 
 
 class JsonControlPlaneWorkerStore:
@@ -158,17 +165,83 @@ class JsonControlPlaneWorkerStore:
             workers = [worker for worker in workers if worker.status == status]
         return workers[:limit]
 
-    def summarize_workers(self) -> dict[str, Any]:
-        workers = self.list_workers(limit=1000)
-        counts_by_status: dict[str, int] = {}
-        for worker in workers:
-            counts_by_status[worker.status] = counts_by_status.get(worker.status, 0) + 1
-        return {
-            "generated_at": utc_now_iso(),
-            "totals": {
-                "workers": len(workers),
-                "running_workers": counts_by_status.get("running", 0),
-            },
-            "counts_by_status": dict(sorted(counts_by_status.items())),
-            "workers": [worker.to_dict() for worker in workers[:50]],
+    def summarize_workers(self, *, now: str | None = None, minimum_stale_after_s: float = 15.0) -> dict[str, Any]:
+        return summarize_worker_records(
+            self.list_workers(limit=1000),
+            now=now or utc_now_iso(),
+            minimum_stale_after_s=minimum_stale_after_s,
+        )
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        timestamp = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
+
+
+def build_worker_view(
+    worker: ControlPlaneWorkerRecord,
+    *,
+    now: str,
+    minimum_stale_after_s: float = 15.0,
+) -> dict[str, Any]:
+    payload = worker.to_dict()
+    stale_after_s = worker.stale_after_s(minimum_stale_after_s=minimum_stale_after_s)
+    now_ts = _parse_timestamp(now)
+    heartbeat_ts = _parse_timestamp(worker.last_heartbeat_at)
+    heartbeat_age_s: float | None = None
+    if now_ts is not None and heartbeat_ts is not None:
+        heartbeat_age_s = max(0.0, round((now_ts - heartbeat_ts).total_seconds(), 3))
+    if worker.status != "running":
+        health_status = "stopped"
+    elif heartbeat_age_s is not None and heartbeat_age_s > stale_after_s:
+        health_status = "stale"
+    else:
+        health_status = "healthy"
+    payload.update(
+        {
+            "health_status": health_status,
+            "heartbeat_age_s": heartbeat_age_s,
+            "stale_after_s": round(stale_after_s, 3),
+            "is_stale": health_status == "stale",
         }
+    )
+    return payload
+
+
+def summarize_worker_records(
+    workers: list[ControlPlaneWorkerRecord],
+    *,
+    now: str,
+    minimum_stale_after_s: float = 15.0,
+) -> dict[str, Any]:
+    counts_by_status: dict[str, int] = {}
+    counts_by_health: dict[str, int] = {}
+    rows = [
+        build_worker_view(worker, now=now, minimum_stale_after_s=minimum_stale_after_s)
+        for worker in workers
+    ]
+    for worker in workers:
+        counts_by_status[worker.status] = counts_by_status.get(worker.status, 0) + 1
+    for row in rows:
+        counts_by_health[row["health_status"]] = counts_by_health.get(row["health_status"], 0) + 1
+    return {
+        "generated_at": now,
+        "totals": {
+            "workers": len(workers),
+            "running_workers": counts_by_status.get("running", 0),
+            "stopped_workers": counts_by_status.get("stopped", 0),
+            "healthy_workers": counts_by_health.get("healthy", 0),
+            "stale_workers": counts_by_health.get("stale", 0),
+        },
+        "counts_by_status": dict(sorted(counts_by_status.items())),
+        "counts_by_health": dict(sorted(counts_by_health.items())),
+        "workers": rows[:50],
+    }
