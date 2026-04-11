@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Protocol, runtime_checkable
@@ -55,6 +56,9 @@ class ControlPlaneJob:
     last_error: JobPayload | None = None
     started_at: str | None = None
     completed_at: str | None = None
+    worker_id: str | None = None
+    lease_expires_at: str | None = None
+    heartbeat_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +80,9 @@ class ControlPlaneJob:
             "last_error": self.last_error,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "worker_id": self.worker_id,
+            "lease_expires_at": self.lease_expires_at,
+            "heartbeat_at": self.heartbeat_at,
         }
 
     @classmethod
@@ -99,6 +106,9 @@ class ControlPlaneJob:
             last_error=dict(payload["last_error"]) if isinstance(payload.get("last_error"), dict) else payload.get("last_error"),
             started_at=payload.get("started_at"),
             completed_at=payload.get("completed_at"),
+            worker_id=payload.get("worker_id"),
+            lease_expires_at=payload.get("lease_expires_at"),
+            heartbeat_at=payload.get("heartbeat_at"),
         )
 
 
@@ -147,7 +157,11 @@ class ControlPlaneJobRepository(Protocol):
 
     def get_job(self, job_id: str) -> ControlPlaneJob: ...
 
-    def claim_next_job(self) -> ControlPlaneJob | None: ...
+    def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None: ...
+
+    def heartbeat_job(self, job_id: str, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob: ...
+
+    def requeue_stale_jobs(self, *, now: str | None = None) -> list[ControlPlaneJob]: ...
 
     def complete_job(self, job_id: str, result_payload: JobPayload) -> ControlPlaneJob: ...
 
@@ -224,15 +238,19 @@ class ControlPlaneJobStore:
                 return job
         raise KeyError(f"Unknown job '{job_id}'.")
 
-    def claim_next_job(self) -> ControlPlaneJob | None:
+    def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None:
         with self._lock:
             registry = ControlPlaneJobRegistry.load(self.path)
+            requeued = _requeue_stale_jobs(registry, now=utc_now_iso())
             queued_jobs = [job for job in registry.jobs if job.status == "queued"]
             if not queued_jobs:
+                if requeued:
+                    registry.save(self.path)
                 return None
             queued_jobs.sort(key=lambda item: (item.created_at, item.job_id))
             job = queued_jobs[0]
             now = utc_now_iso()
+            lease_expires_at = _lease_deadline(now, lease_ttl_s)
             for stored in registry.jobs:
                 if stored.job_id != job.job_id:
                     continue
@@ -240,10 +258,36 @@ class ControlPlaneJobStore:
                 stored.attempts += 1
                 stored.started_at = now
                 stored.updated_at = now
+                stored.worker_id = worker_id
+                stored.heartbeat_at = now
+                stored.lease_expires_at = lease_expires_at
                 job = stored
                 break
             registry.save(self.path)
         return job
+
+    def heartbeat_job(self, job_id: str, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob:
+        with self._lock:
+            registry = ControlPlaneJobRegistry.load(self.path)
+            job = _find_job(registry, job_id)
+            if job.status != "running":
+                raise ValueError(f"Only running jobs can be heartbeated. Job '{job_id}' is currently '{job.status}'.")
+            if job.worker_id != worker_id:
+                raise ValueError(f"Job '{job_id}' is currently leased by '{job.worker_id}', not '{worker_id}'.")
+            now = utc_now_iso()
+            job.heartbeat_at = now
+            job.lease_expires_at = _lease_deadline(now, lease_ttl_s)
+            job.updated_at = now
+            registry.save(self.path)
+            return job
+
+    def requeue_stale_jobs(self, *, now: str | None = None) -> list[ControlPlaneJob]:
+        with self._lock:
+            registry = ControlPlaneJobRegistry.load(self.path)
+            rows = _requeue_stale_jobs(registry, now=now or utc_now_iso())
+            if rows:
+                registry.save(self.path)
+            return rows
 
     def complete_job(self, job_id: str, result_payload: JobPayload) -> ControlPlaneJob:
         with self._lock:
@@ -256,6 +300,9 @@ class ControlPlaneJobStore:
             job.completed_at = now
             job.updated_at = now
             job.queue_reason = "completed"
+            job.worker_id = None
+            job.lease_expires_at = None
+            job.heartbeat_at = now
             registry.save(self.path)
             return job
 
@@ -277,6 +324,9 @@ class ControlPlaneJobStore:
                 job.completed_at = now
                 job.queue_reason = "failed"
             job.updated_at = now
+            job.worker_id = None
+            job.lease_expires_at = None
+            job.heartbeat_at = now
             registry.save(self.path)
             return job
 
@@ -294,6 +344,9 @@ class ControlPlaneJobStore:
             job.completed_at = None
             job.updated_at = utc_now_iso()
             job.queue_reason = "manual_retry"
+            job.worker_id = None
+            job.lease_expires_at = None
+            job.heartbeat_at = job.updated_at
             registry.save(self.path)
             return job
 
@@ -311,6 +364,9 @@ class ControlPlaneJobWorker:
         self.store = store
         self.handlers = handlers or default_job_handlers()
         self.poll_interval_s = poll_interval_s if poll_interval_s is not None else settings.control_plane_job_poll_interval_s
+        self.lease_ttl_s = settings.control_plane_job_lease_ttl_s
+        self.heartbeat_interval_s = settings.control_plane_job_heartbeat_interval_s
+        self.worker_id = f"worker-{uuid4().hex[:10]}"
         self._stop_event = Event()
         self._thread: Thread | None = None
 
@@ -330,7 +386,8 @@ class ControlPlaneJobWorker:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            job = self.store.claim_next_job()
+            self.store.requeue_stale_jobs()
+            job = self.store.claim_next_job(worker_id=self.worker_id, lease_ttl_s=self.lease_ttl_s)
             if job is None:
                 self._stop_event.wait(self.poll_interval_s)
                 continue
@@ -344,9 +401,19 @@ class ControlPlaneJobWorker:
                     },
                 )
                 continue
+            heartbeat_stop = Event()
+            heartbeat_thread = Thread(
+                target=self._heartbeat_loop,
+                args=(job.job_id, heartbeat_stop),
+                name=f"control-plane-job-heartbeat-{job.job_id}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
             try:
                 result_payload = handler(self.settings, dict(job.input_payload))
             except Exception as exc:  # pragma: no cover - defensive worker boundary
+                heartbeat_stop.set()
+                heartbeat_thread.join(timeout=5)
                 self.store.fail_job(
                     job.job_id,
                     {
@@ -355,7 +422,20 @@ class ControlPlaneJobWorker:
                     },
                 )
                 continue
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=5)
             self.store.complete_job(job.job_id, result_payload)
+
+    def _heartbeat_loop(self, job_id: str, stop_event: Event) -> None:
+        while not stop_event.wait(self.heartbeat_interval_s):
+            try:
+                self.store.heartbeat_job(
+                    job_id,
+                    worker_id=self.worker_id,
+                    lease_ttl_s=self.lease_ttl_s,
+                )
+            except Exception:  # pragma: no cover - defensive background boundary
+                return
 
 
 def default_job_handlers() -> dict[str, JobHandler]:
@@ -512,3 +592,43 @@ def _find_job(registry: ControlPlaneJobRegistry, job_id: str) -> ControlPlaneJob
         if job.job_id == job_id:
             return job
     raise KeyError(f"Unknown job '{job_id}'.")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        timestamp = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
+
+
+def _lease_deadline(started_at: str, lease_ttl_s: float) -> str:
+    started = _parse_timestamp(started_at) or datetime.now(UTC)
+    return (started + timedelta(seconds=max(lease_ttl_s, 0.1))).isoformat()
+
+
+def _requeue_stale_jobs(registry: ControlPlaneJobRegistry, *, now: str) -> list[ControlPlaneJob]:
+    rows: list[ControlPlaneJob] = []
+    now_ts = _parse_timestamp(now)
+    if now_ts is None:
+        return rows
+    for job in registry.jobs:
+        if job.status != "running":
+            continue
+        deadline = _parse_timestamp(job.lease_expires_at)
+        if deadline is None or deadline > now_ts:
+            continue
+        job.status = "queued"
+        job.updated_at = now
+        job.completed_at = None
+        job.queue_reason = "lease_expired_retry"
+        job.worker_id = None
+        job.heartbeat_at = now
+        job.lease_expires_at = None
+        rows.append(job)
+    return rows

@@ -7,12 +7,16 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
-from agent_architect_lab.control_plane.jobs import ControlPlaneJob, ControlPlaneJobRepository
+from agent_architect_lab.control_plane.jobs import (
+    ControlPlaneJob,
+    ControlPlaneJobRepository,
+    _lease_deadline,
+)
 from agent_architect_lab.control_plane.storage import AuditEvent, IdempotencyRecord
 from agent_architect_lab.models import utc_now_iso
 
 
-CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 2
+CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 3
 _SCHEMA_NAME = "control_plane"
 
 
@@ -325,10 +329,11 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
             raise KeyError(f"Unknown job '{job_id}'.")
         return _job_from_row(row)
 
-    def claim_next_job(self) -> ControlPlaneJob | None:
+    def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None:
         with self._lock:
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                _requeue_stale_jobs_sql(connection, now=utc_now_iso())
                 row = connection.execute(
                     """
                     SELECT * FROM control_plane_jobs
@@ -341,16 +346,20 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                     connection.commit()
                     return None
                 now = utc_now_iso()
+                lease_expires_at = _lease_deadline(now, lease_ttl_s)
                 connection.execute(
                     """
                     UPDATE control_plane_jobs
                     SET status = 'running',
                         attempts = attempts + 1,
                         started_at = ?,
-                        updated_at = ?
+                        updated_at = ?,
+                        worker_id = ?,
+                        heartbeat_at = ?,
+                        lease_expires_at = ?
                     WHERE job_id = ?
                     """,
-                    (now, now, str(row["job_id"])),
+                    (now, now, worker_id, now, lease_expires_at, str(row["job_id"])),
                 )
                 updated = connection.execute(
                     "SELECT * FROM control_plane_jobs WHERE job_id = ?",
@@ -358,6 +367,44 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                 ).fetchone()
                 connection.commit()
         return _job_from_row(updated) if updated is not None else None
+
+    def heartbeat_job(self, job_id: str, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob:
+        with self._lock:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM control_plane_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"Unknown job '{job_id}'.")
+                if str(row["status"]) != "running":
+                    raise ValueError(f"Only running jobs can be heartbeated. Job '{job_id}' is currently '{row['status']}'.")
+                if _optional_text(row["worker_id"]) != worker_id:
+                    raise ValueError(f"Job '{job_id}' is currently leased by '{row['worker_id']}', not '{worker_id}'.")
+                now = utc_now_iso()
+                connection.execute(
+                    """
+                    UPDATE control_plane_jobs
+                    SET heartbeat_at = ?,
+                        lease_expires_at = ?,
+                        updated_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (now, _lease_deadline(now, lease_ttl_s), now, job_id),
+                )
+                updated = connection.execute(
+                    "SELECT * FROM control_plane_jobs WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+        return _job_from_row(updated)
+
+    def requeue_stale_jobs(self, *, now: str | None = None) -> list[ControlPlaneJob]:
+        with self._lock:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = _requeue_stale_jobs_sql(connection, now=now or utc_now_iso())
+                connection.commit()
+        return rows
 
     def complete_job(self, job_id: str, result_payload: dict[str, Any]) -> ControlPlaneJob:
         with self._lock:
@@ -372,10 +419,13 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                         error = NULL,
                         completed_at = ?,
                         updated_at = ?,
-                        queue_reason = 'completed'
+                        queue_reason = 'completed',
+                        worker_id = NULL,
+                        lease_expires_at = NULL,
+                        heartbeat_at = ?
                     WHERE job_id = ?
                     """,
-                    (json.dumps(result_payload, sort_keys=True), now, now, job_id),
+                    (json.dumps(result_payload, sort_keys=True), now, now, now, job_id),
                 )
                 row = connection.execute(
                     "SELECT * FROM control_plane_jobs WHERE job_id = ?",
@@ -405,10 +455,13 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                             last_error = ?,
                             completed_at = NULL,
                             updated_at = ?,
-                            queue_reason = 'automatic_retry'
+                            queue_reason = 'automatic_retry',
+                            worker_id = NULL,
+                            lease_expires_at = NULL,
+                            heartbeat_at = ?
                         WHERE job_id = ?
                         """,
-                        (latest_error, now, job_id),
+                        (latest_error, now, now, job_id),
                     )
                 else:
                     connection.execute(
@@ -419,10 +472,13 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                             last_error = ?,
                             completed_at = ?,
                             updated_at = ?,
-                            queue_reason = 'failed'
+                            queue_reason = 'failed',
+                            worker_id = NULL,
+                            lease_expires_at = NULL,
+                            heartbeat_at = ?
                         WHERE job_id = ?
                         """,
-                        (latest_error, latest_error, now, now, job_id),
+                        (latest_error, latest_error, now, now, now, job_id),
                     )
                 updated = connection.execute(
                     "SELECT * FROM control_plane_jobs WHERE job_id = ?",
@@ -454,7 +510,9 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                         error = NULL,
                         completed_at = NULL,
                         updated_at = ?,
-                        queue_reason = 'manual_retry'
+                        queue_reason = 'manual_retry',
+                        worker_id = NULL,
+                        lease_expires_at = NULL
                     WHERE job_id = ?
                     """,
                     (next_max_attempts, now, job_id),
@@ -478,6 +536,8 @@ def _ensure_sqlite_control_plane_schema(connection: sqlite3.Connection) -> int:
             _apply_schema_v1(connection)
         elif next_version == 2:
             _apply_schema_v2(connection)
+        elif next_version == 3:
+            _apply_schema_v3(connection)
         else:  # pragma: no cover - defensive future guard
             raise ValueError(f"Unsupported SQLite schema migration target: {next_version}")
         _write_schema_version(connection, next_version)
@@ -527,6 +587,8 @@ def _has_legacy_tables(connection: sqlite3.Connection) -> bool:
 
 def _infer_legacy_schema_version(connection: sqlite3.Connection) -> int:
     if _has_column(connection, "audit_events", "route_policy_key"):
+        if _has_column(connection, "control_plane_jobs", "worker_id"):
+            return 3
         return 2
     if _has_legacy_tables(connection):
         return 1
@@ -614,6 +676,17 @@ def _apply_schema_v2(connection: sqlite3.Connection) -> None:
     _ensure_v1_indexes(connection)
 
 
+def _apply_schema_v3(connection: sqlite3.Connection) -> None:
+    _apply_schema_v2(connection)
+    if not _has_column(connection, "control_plane_jobs", "worker_id"):
+        connection.execute("ALTER TABLE control_plane_jobs ADD COLUMN worker_id TEXT")
+    if not _has_column(connection, "control_plane_jobs", "lease_expires_at"):
+        connection.execute("ALTER TABLE control_plane_jobs ADD COLUMN lease_expires_at TEXT")
+    if not _has_column(connection, "control_plane_jobs", "heartbeat_at"):
+        connection.execute("ALTER TABLE control_plane_jobs ADD COLUMN heartbeat_at TEXT")
+    _ensure_v1_indexes(connection)
+
+
 def _ensure_v1_indexes(connection: sqlite3.Connection) -> None:
     if _has_table(connection, "idempotency_records"):
         connection.execute(
@@ -639,6 +712,10 @@ def _ensure_v1_indexes(connection: sqlite3.Connection) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON control_plane_jobs (status, created_at ASC, job_id ASC)"
         )
+        if _has_column(connection, "control_plane_jobs", "lease_expires_at"):
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_status_lease_expires_at ON control_plane_jobs (status, lease_expires_at ASC, created_at ASC, job_id ASC)"
+            )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_request_id ON control_plane_jobs (request_id)"
         )
@@ -683,8 +760,11 @@ def _insert_job(connection: sqlite3.Connection, job: ControlPlaneJob) -> None:
             error,
             last_error,
             started_at,
-            completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            completed_at,
+            worker_id,
+            lease_expires_at,
+            heartbeat_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             job.job_id,
@@ -705,6 +785,9 @@ def _insert_job(connection: sqlite3.Connection, job: ControlPlaneJob) -> None:
             json.dumps(job.last_error, sort_keys=True) if job.last_error is not None else None,
             job.started_at,
             job.completed_at,
+            job.worker_id,
+            job.lease_expires_at,
+            job.heartbeat_at,
         ),
     )
 
@@ -738,7 +821,52 @@ def _job_from_row(row: sqlite3.Row) -> ControlPlaneJob:
         last_error=_json_dict(row["last_error"]),
         started_at=_optional_text(row["started_at"]),
         completed_at=_optional_text(row["completed_at"]),
+        worker_id=_optional_text(row["worker_id"]) if "worker_id" in row.keys() else None,
+        lease_expires_at=_optional_text(row["lease_expires_at"]) if "lease_expires_at" in row.keys() else None,
+        heartbeat_at=_optional_text(row["heartbeat_at"]) if "heartbeat_at" in row.keys() else None,
     )
+
+
+def _requeue_stale_jobs_sql(connection: sqlite3.Connection, *, now: str) -> list[ControlPlaneJob]:
+    if not _has_column(connection, "control_plane_jobs", "lease_expires_at"):
+        return []
+    rows = connection.execute(
+        """
+        SELECT * FROM control_plane_jobs
+        WHERE status = 'running'
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at <= ?
+        ORDER BY lease_expires_at ASC, created_at ASC, job_id ASC
+        """,
+        (now,),
+    ).fetchall()
+    if not rows:
+        return []
+    connection.execute(
+        """
+        UPDATE control_plane_jobs
+        SET status = 'queued',
+            updated_at = ?,
+            completed_at = NULL,
+            queue_reason = 'lease_expired_retry',
+            worker_id = NULL,
+            lease_expires_at = NULL,
+            heartbeat_at = ?
+        WHERE status = 'running'
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at <= ?
+        """,
+        (now, now, now),
+    )
+    updated = connection.execute(
+        """
+        SELECT * FROM control_plane_jobs
+        WHERE job_id IN ({})
+        ORDER BY updated_at DESC, job_id DESC
+        """.format(",".join("?" for _ in rows)),
+        tuple(str(row["job_id"]) for row in rows),
+    ).fetchall()
+    return [_job_from_row(row) for row in updated]
 
 
 def _idempotency_from_row(row: sqlite3.Row) -> IdempotencyRecord:

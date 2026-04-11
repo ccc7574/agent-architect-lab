@@ -22,7 +22,7 @@ This document reviews the current `agent-architect-lab` repository as if it were
    Incident bundles, governance summaries, weekly status reports, release runbooks, operator handoff snapshots, planner shadow reports, and bounded release command briefs all exist as durable exports. The newer exports also ship Markdown plus JSON sidecars with explicit artifact lineage.
 
 2. The control plane boundary is now useful for production-style drills, but it is still single-node and intentionally narrow.
-   The repo now has token-gated read and write boundaries, request replay protection, audit trails, route-scoped actor and role policy, persisted jobs, follow-up eval linkage, and backup/restore workflows. It still lacks distributed queueing, shared locking, external databases, and broader release-state mutation through the HTTP surface.
+   The repo now has token-gated read and write boundaries, request replay protection, audit trails, route-scoped actor and role policy, persisted jobs, lease-based worker recovery, follow-up eval linkage, and backup/restore workflows. It still lacks distributed queueing, shared locking, external databases, and broader release-state mutation through the HTTP surface.
 
 3. Runtime realism has moved beyond scaffolding, but it is still not a full hosted release path.
    Planner shadow validates first-step planner behavior and bounded role handoff artifacts model release command ownership, but default execution is still heuristic-first and the multi-role pattern is still artifact-level rather than worker-execution-level.
@@ -53,7 +53,7 @@ This document reviews the current `agent-architect-lab` repository as if it were
 
 Goal: move from a strong local/internal control plane to a more realistic multi-node service boundary.
 
-- Replace the persisted in-process worker with a queue and separate worker process model
+- Replace the current leased single-node worker with a true queue and separate worker process model
 - Move storage beyond local artifact-backed JSON into a more realistic service backing store
 - Expand auth and policy toward fuller RBAC or external policy integration
 - Add stronger coordination for retries, locks, and recovery semantics

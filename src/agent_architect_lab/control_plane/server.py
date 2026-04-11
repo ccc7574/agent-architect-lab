@@ -132,7 +132,10 @@ class ControlPlaneApp:
                         "generated_at": utc_now_iso(),
                         "worker": {
                             "alive": self.job_worker.is_alive(),
+                            "worker_id": self.job_worker.worker_id,
                             "poll_interval_s": self.job_worker.poll_interval_s,
+                            "lease_ttl_s": self.job_worker.lease_ttl_s,
+                            "heartbeat_interval_s": self.job_worker.heartbeat_interval_s,
                         },
                         "auth": {
                             "read_token_configured": bool(self.auth.read_token),

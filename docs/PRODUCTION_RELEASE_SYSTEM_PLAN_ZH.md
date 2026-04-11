@@ -22,7 +22,7 @@
    incident bundle、governance summary、weekly status、release runbook、operator handoff snapshot、planner shadow、release command brief 都已经能稳定导出。新一批导出还会同时产出 Markdown 和 JSON sidecar，并带显式 artifact lineage。
 
 2. control plane 已经足够支撑 production-style drill，但仍然是单机、刻意收窄的边界。
-   现在已经有 token 边界、请求重放保护、审计轨迹、route-level actor/role policy、持久化 job、follow-up eval linkage、backup/restore 工作流，但仍缺分布式队列、共享锁、外部数据库，以及更完整的 release-state HTTP mutation surface。
+   现在已经有 token 边界、请求重放保护、审计轨迹、route-level actor/role policy、持久化 job、lease-based worker recovery、follow-up eval linkage、backup/restore 工作流，但仍缺分布式队列、共享锁、外部数据库，以及更完整的 release-state HTTP mutation surface。
 
 3. runtime realism 已经不再只是脚手架，但仍不是完整的 hosted release path。
    planner shadow 能验证 planner 第一步行为，bounded role handoff 也已经能把 release command ownership 结构化表达出来，但默认执行仍然以 heuristic runtime 为主，多角色模式也还停留在 artifact-level，而不是 worker-execution-level。
@@ -53,7 +53,7 @@
 
 目标：把现在已经很强的本地 control plane，继续推进成更像真实多节点服务的形态。
 
-- 用队列 + 独立 worker 进程替换当前持久化的内置 worker
+- 用真实队列 + 独立 worker 进程替换当前单机 leased worker
 - 把存储从本地 artifact JSON 继续推进到更真实的服务后端
 - 把鉴权和策略继续升级到更完整的 RBAC 或外部 policy integration
 - 增强重试、锁、恢复和一致性协调语义

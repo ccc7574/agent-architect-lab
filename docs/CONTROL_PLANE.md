@@ -7,7 +7,7 @@ The control plane now has four internal layers:
 - `server.py`: HTTP routing and response envelope
 - `policies.py`: centralized route and payload policy checks
 - `repositories.py`: repository bundle assembly for local JSON or SQLite-backed persistence
-- `storage.py` / `jobs.py`: persistence repositories plus persisted in-process job execution
+- `storage.py` / `jobs.py`: persistence repositories plus leased queue-style job execution
 
 ## Why It Exists
 
@@ -49,6 +49,7 @@ SQLite schema migrations run automatically on startup. The `/health` response ex
 - The audit log now records successful mutations plus authentication, authorization, identity, and payload-policy denials
 - Idempotency registry state is persisted in `artifacts/control-plane/idempotency-registry.json`
 - Long-running exports are persisted in `artifacts/control-plane/job-registry.json`
+- Running jobs now also carry `worker_id`, `heartbeat_at`, and `lease_expires_at` so stale leases can be recovered
 - Every API response now includes `_meta.request_id` for correlation
 - Policy rejections now include structured `error.details` metadata for dashboards and audits
 
@@ -490,10 +491,10 @@ This control plane is intentionally narrow:
 
 - read models are optimized for governance and review flows
 - write models currently cover incident open/transition/follow-up linkage plus export and backup job submission
-- long-running exports already run through a persisted in-process worker with automatic retry and manual requeue, but not a distributed queue
+- long-running exports already run through a persisted leased worker with automatic retry, manual requeue, and stale-lease recovery, but not a distributed queue
 - storage is still local artifact-backed JSON, not an external database
 - access control now goes through a centralized route/payload policy engine, but it is not yet a full RBAC or external policy service
 - exported governance artifacts now keep machine-readable lineage, but this is still file-based rather than a centralized metadata service
-- idempotency, audit, and job persistence exist, but there is no distributed queue or lock coordination yet
+- idempotency, audit, job persistence, and lease-based recovery exist, but there is no distributed queue or lock coordination yet
 
 That makes it suitable for local production-style drills and internal tooling, while keeping the repo dependency-light and testable.
