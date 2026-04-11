@@ -21,6 +21,7 @@ from agent_architect_lab.cli import (
     cmd_export_incident_report,
     cmd_export_incident_bundle,
     cmd_export_governance_summary,
+    cmd_export_release_runbook,
     cmd_grant_release_override,
     cmd_list_incidents,
     cmd_list_active_overrides,
@@ -288,6 +289,53 @@ def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_
     assert "## Override Pressure" in markdown
     assert "unsafe production answer" in markdown
     assert payload["metrics"]["active_incident_count"] == 1
+
+
+def test_cmd_export_release_runbook_writes_markdown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-a", "", True, "", "release-a")
+        cmd_approve_release("release-a", "qa-owner", "", "approved")
+        cmd_deploy_release("release-a", "staging", "release-manager", "deploy staging")
+        cmd_open_incident(
+            "high",
+            "staging rollback watch",
+            "incident-commander",
+            "staging",
+            "release-a",
+            "",
+            "triage started",
+        )
+        cmd_grant_release_override(
+            "release-a",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "change review exception",
+            "",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_export_release_runbook("release-a", [], 10, 10, "", "Release A Runbook")
+    payload = json.loads(buffer.getvalue())
+    markdown = Path(payload["saved_to"]).read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert payload["release_name"] == "release-a"
+    assert payload["step_count"] >= 3
+    assert "# Release A Runbook" in markdown
+    assert "## Release Overview" in markdown
+    assert "## Execution Plan" in markdown
+    assert "## Verification Commands" in markdown
+    assert "staging rollback watch" in markdown
+    assert "change review exception" in markdown
+    assert "deploy-release release-a --environment staging" in markdown
+    assert "rollback-release release-a --environment production" in markdown
 
 
 def test_cmd_release_and_incident_ledger_backup_round_trip(monkeypatch, tmp_path: Path) -> None:

@@ -219,6 +219,14 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 ```
 
+在正式 rollout 前导出一份面向值班人员的 release runbook：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-runbook \
+  2026-04-10-main \
+  --title "Release 2026-04-10 Main Runbook"
+```
+
 查看账本存储状态和完整性：
 
 ```bash

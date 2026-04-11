@@ -17,6 +17,7 @@ from agent_architect_lab.control_plane.maintenance import (
 from agent_architect_lab.control_plane.reporting import (
     export_governance_summary_report,
     export_operator_handoff_report,
+    export_release_runbook_report,
     record_operator_handoff_snapshot,
 )
 from agent_architect_lab.harness.ledger_maintenance import (
@@ -359,6 +360,7 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "export_governance_summary": _handle_export_governance_summary,
         "record_operator_handoff": _handle_record_operator_handoff,
         "export_operator_handoff_report": _handle_export_operator_handoff_report,
+        "export_release_runbook": _handle_export_release_runbook,
         "backup_control_plane_storage": _handle_backup_control_plane_storage,
         "verify_control_plane_backup": _handle_verify_control_plane_backup,
         "restore_control_plane_backup": _handle_restore_control_plane_backup,
@@ -396,6 +398,18 @@ def _handle_export_operator_handoff_report(settings: Settings, payload: JobPaylo
         settings,
         snapshot=str(payload.get("snapshot", "")),
         latest=bool(payload.get("latest", False)),
+        output=str(payload.get("output", "")),
+        title=str(payload.get("title", "")),
+    )
+
+
+def _handle_export_release_runbook(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return export_release_runbook_report(
+        settings,
+        release_name=str(payload.get("release_name", "")),
+        environments=list(payload.get("environments", [])),
+        history_limit=int(payload.get("history_limit", 10)),
+        incident_limit=int(payload.get("incident_limit", 20)),
         output=str(payload.get("output", "")),
         title=str(payload.get("title", "")),
     )

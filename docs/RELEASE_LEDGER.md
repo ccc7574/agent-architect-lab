@@ -264,6 +264,14 @@ Render a manager-facing governance summary:
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 ```
 
+Render an operator-facing release runbook before a rollout window:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-runbook \
+  2026-04-10-main \
+  --title "Release 2026-04-10 Main Runbook"
+```
+
 Inspect ledger storage status before a backup or restore drill:
 
 ```bash

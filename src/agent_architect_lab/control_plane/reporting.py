@@ -8,10 +8,15 @@ from typing import Any
 from agent_architect_lab.config import Settings
 from agent_architect_lab.harness.incidents import get_incident_review_board, list_incidents
 from agent_architect_lab.harness.ledger import (
+    get_environment_history,
+    get_environment_status,
     get_approval_review_board,
     get_operator_handoff,
     get_override_review_board,
+    get_release_readiness_digest,
+    get_release_record,
     get_release_risk_board,
+    get_rollout_matrix,
     list_active_overrides,
     list_releases,
 )
@@ -270,6 +275,128 @@ def export_governance_summary_report(
         encoding="utf-8",
     )
     return {"saved_to": str(output_path), "title": report_title, "metrics": payload["metrics"]}
+
+
+def build_release_runbook_payload(
+    settings: Settings,
+    *,
+    release_name: str,
+    environments: list[str] | None = None,
+    history_limit: int = 10,
+    incident_limit: int = 20,
+) -> dict[str, Any]:
+    selected_environments = environments or settings.environment_names
+    release_record = get_release_record(release_name, ledger_path=settings.release_ledger_path).to_dict()
+    readiness_digest = get_release_readiness_digest(
+        release_name,
+        environments=selected_environments,
+        ledger_path=settings.release_ledger_path,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
+    ).to_dict()
+    rollout_matrix = get_rollout_matrix(
+        selected_environments,
+        ledger_path=settings.release_ledger_path,
+        release_name=release_name,
+        production_soak_minutes=settings.production_soak_minutes,
+        required_approver_roles=settings.production_required_approver_roles,
+        environment_policies=settings.environment_policies,
+        environment_freeze_windows=settings.environment_freeze_windows,
+    ).to_dict()
+    active_overrides = [
+        row.to_dict()
+        for row in list_active_overrides(
+            ledger_path=settings.release_ledger_path,
+            release_name=release_name,
+            environment=None,
+            limit=max(incident_limit, 50),
+        )
+    ]
+    active_incidents = [
+        row.to_dict()
+        for row in list_incidents(
+            ledger_path=settings.incident_ledger_path,
+            status=None,
+            severity=None,
+            limit=incident_limit,
+        )
+        if row.release_name == release_name and row.status not in {"resolved", "closed"}
+    ]
+    environment_statuses = {
+        environment: get_environment_status(environment, ledger_path=settings.release_ledger_path).to_dict()
+        for environment in selected_environments
+    }
+    environment_histories = {
+        environment: [
+            entry.to_dict()
+            for entry in get_environment_history(
+                environment,
+                ledger_path=settings.release_ledger_path,
+                limit=history_limit,
+            )
+        ]
+        for environment in selected_environments
+    }
+    execution_plan = _build_release_runbook_steps(
+        release_name,
+        release_record=release_record,
+        readiness_digest=readiness_digest,
+        rollout_matrix=rollout_matrix,
+        active_incidents=active_incidents,
+        active_overrides=active_overrides,
+    )
+    verification_commands = _build_release_runbook_verification_commands(release_name, selected_environments)
+    return {
+        "generated_at": utc_now_iso(),
+        "release_name": release_name,
+        "environments": selected_environments,
+        "release_record": release_record,
+        "readiness_digest": readiness_digest,
+        "rollout_matrix": rollout_matrix,
+        "active_incidents": active_incidents,
+        "active_overrides": active_overrides,
+        "environment_statuses": environment_statuses,
+        "environment_histories": environment_histories,
+        "execution_plan": execution_plan,
+        "verification_commands": verification_commands,
+    }
+
+
+def export_release_runbook_report(
+    settings: Settings,
+    *,
+    release_name: str,
+    environments: list[str],
+    history_limit: int,
+    incident_limit: int,
+    output: str,
+    title: str,
+) -> dict[str, Any]:
+    payload = build_release_runbook_payload(
+        settings,
+        release_name=release_name,
+        environments=environments or settings.environment_names,
+        history_limit=history_limit,
+        incident_limit=incident_limit,
+    )
+    safe_release_name = release_name.replace("/", "-")
+    output_path = Path(output) if output else settings.reports_dir / f"release-runbook-{safe_release_name}.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report_title = title.strip() or f"Release Runbook: {release_name}"
+    output_path.write_text(
+        render_release_runbook_markdown(payload, title=report_title),
+        encoding="utf-8",
+    )
+    return {
+        "saved_to": str(output_path),
+        "title": report_title,
+        "release_name": release_name,
+        "environments": payload["environments"],
+        "step_count": len(payload["execution_plan"]),
+    }
 
 
 def markdown_cell(value: object) -> str:
@@ -573,3 +700,282 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
     )
     lines.append("")
     return "\n".join(lines)
+
+
+def render_release_runbook_markdown(payload: dict[str, Any], *, title: str) -> str:
+    release_record = payload.get("release_record", {})
+    readiness_digest = payload.get("readiness_digest", {})
+    rollout_rows = payload.get("rollout_matrix", {}).get("rows", [])
+    active_incidents = payload.get("active_incidents", [])
+    active_overrides = payload.get("active_overrides", [])
+    execution_plan = payload.get("execution_plan", [])
+    verification_commands = payload.get("verification_commands", [])
+    environment_statuses = payload.get("environment_statuses", {})
+    environment_histories = payload.get("environment_histories", {})
+
+    lines = [
+        f"# {title}",
+        "",
+        f"- Generated at: {markdown_cell(payload.get('generated_at'))}",
+        f"- Release: {markdown_cell(payload.get('release_name'))}",
+        f"- Environments: {markdown_cell(payload.get('environments', []))}",
+        "",
+        "## Release Overview",
+        "",
+    ]
+    lines.extend(
+        render_markdown_table(
+            ["Field", "Value"],
+            [
+                ["State", release_record.get("state")],
+                ["Recommended action", release_record.get("recommended_action")],
+                ["Summary", release_record.get("summary")],
+                ["Suites", release_record.get("suites", [])],
+                ["Blockers", release_record.get("blockers", [])],
+                ["Warnings", release_record.get("warnings", [])],
+                ["Approvals", [approval.get("role") for approval in release_record.get("approvals", [])]],
+                ["Deployments", [deployment.get("environment") for deployment in release_record.get("deployments", [])]],
+            ],
+        )
+    )
+    lines.extend(["", "## Readiness Digest", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Field", "Value"],
+            [
+                ["Release state", readiness_digest.get("release_state")],
+                ["All ready", readiness_digest.get("all_ready")],
+                ["Ready environments", readiness_digest.get("ready_environments", [])],
+                ["Blocking environments", readiness_digest.get("blocking_environments", [])],
+                ["Summary", readiness_digest.get("summary")],
+            ],
+        )
+    )
+    lines.extend(["", "## Rollout Matrix", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Environment", "Policy State", "Readiness", "Blockers", "Recommended Action"],
+            [
+                [
+                    row.get("environment"),
+                    row.get("policy", {}).get("required_state"),
+                    (row.get("readiness") or {}).get("passed"),
+                    (row.get("readiness") or {}).get("blockers", []),
+                    row.get("recommended_action"),
+                ]
+                for row in rollout_rows
+            ],
+        )
+    )
+    lines.extend(["", "## Active Incidents", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Incident", "Severity", "Status", "Owner", "Environment", "Summary"],
+            [
+                [
+                    row.get("incident_id"),
+                    row.get("severity"),
+                    row.get("status"),
+                    row.get("owner"),
+                    row.get("environment"),
+                    row.get("summary"),
+                ]
+                for row in active_incidents
+            ],
+        )
+    )
+    lines.extend(["", "## Active Overrides", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Environment", "Blocker", "Actor", "Expires At", "Note"],
+            [
+                [
+                    row.get("environment"),
+                    row.get("blocker"),
+                    row.get("actor"),
+                    row.get("expires_at"),
+                    row.get("note"),
+                ]
+                for row in active_overrides
+            ],
+        )
+    )
+    lines.extend(["", "## Execution Plan", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Phase", "Status", "Environment", "Action", "Command"],
+            [
+                [
+                    row.get("phase"),
+                    row.get("status"),
+                    row.get("environment"),
+                    row.get("action"),
+                    row.get("command"),
+                ]
+                for row in execution_plan
+            ],
+        )
+    )
+    lines.extend(["", "## Verification Commands", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Command", "Purpose"],
+            [
+                [row.get("command"), row.get("purpose")]
+                for row in verification_commands
+            ],
+        )
+    )
+    lines.extend(["", "## Environment Status", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Environment", "Active Release", "Deployed At", "Status"],
+            [
+                [
+                    environment,
+                    status.get("active_release"),
+                    status.get("deployed_at"),
+                    status.get("status"),
+                ]
+                for environment, status in environment_statuses.items()
+            ],
+        )
+    )
+    for environment, history_rows in environment_histories.items():
+        lines.extend(["", f"## Environment History: {environment}", ""])
+        lines.extend(
+            render_markdown_table(
+                ["Release", "Status", "Deployed At", "Deployed By", "Replaces"],
+                [
+                    [
+                        row.get("release_name"),
+                        row.get("status"),
+                        row.get("deployed_at"),
+                        row.get("deployed_by"),
+                        row.get("replaces_release"),
+                    ]
+                    for row in history_rows
+                ],
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_release_runbook_steps(
+    release_name: str,
+    *,
+    release_record: dict[str, Any],
+    readiness_digest: dict[str, Any],
+    rollout_matrix: dict[str, Any],
+    active_incidents: list[dict[str, Any]],
+    active_overrides: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    rows.append(
+        {
+            "phase": "preflight",
+            "status": "required",
+            "environment": "-",
+            "action": f"Verify release state '{release_record.get('state')}' and review remaining blockers before rollout.",
+            "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli release-status {release_name}",
+        }
+    )
+    if active_incidents:
+        rows.append(
+            {
+                "phase": "preflight",
+                "status": "blocked",
+                "environment": "-",
+                "action": "Resolve or explicitly accept active incidents linked to this release before rollout.",
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli list-incidents --limit {max(len(active_incidents), 10)}",
+            }
+        )
+    if active_overrides:
+        rows.append(
+            {
+                "phase": "preflight",
+                "status": "review",
+                "environment": "-",
+                "action": "Review active overrides, expiry times, and whether they are still justified for this release.",
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli list-active-overrides --release-name {release_name}",
+            }
+        )
+    if not readiness_digest.get("all_ready", False):
+        rows.append(
+            {
+                "phase": "preflight",
+                "status": "review",
+                "environment": "-",
+                "action": "Inspect readiness blockers before attempting rollout.",
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest {release_name}",
+            }
+        )
+    for row in rollout_matrix.get("rows", []):
+        environment = str(row.get("environment"))
+        readiness = row.get("readiness") or {}
+        if readiness.get("passed"):
+            action = f"Deploy release to {environment}."
+            status = "ready"
+        else:
+            blockers = readiness.get("blockers", [])
+            action = (
+                f"Clear rollout blockers for {environment}: {', '.join(str(item) for item in blockers) or 'none'}."
+            )
+            status = "blocked"
+        rows.append(
+            {
+                "phase": "rollout",
+                "status": status,
+                "environment": environment,
+                "action": action,
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli deploy-release {release_name} --environment {environment} --by <operator>",
+            }
+        )
+        rows.append(
+            {
+                "phase": "verification",
+                "status": "required",
+                "environment": environment,
+                "action": f"Verify environment state and readiness after the {environment} action.",
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment {environment}",
+            }
+        )
+        rows.append(
+            {
+                "phase": "rollback",
+                "status": "prepared",
+                "environment": environment,
+                "action": f"Rollback {environment} if rollout triggers incidents or violates policy.",
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli rollback-release {release_name} --environment {environment} --by <operator>",
+            }
+        )
+    return rows
+
+
+def _build_release_runbook_verification_commands(
+    release_name: str,
+    environments: list[str],
+) -> list[dict[str, str]]:
+    rows = [
+        {
+            "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli release-status {release_name}",
+            "purpose": "Inspect release state, approvals, overrides, deployments, and event history.",
+        },
+        {
+            "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli release-readiness-digest {release_name}",
+            "purpose": "Summarize rollout blockers, ready environments, and override pressure.",
+        },
+        {
+            "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli rollout-matrix {release_name}",
+            "purpose": "Inspect environment-by-environment readiness and next action recommendations.",
+        },
+    ]
+    for environment in environments:
+        rows.append(
+            {
+                "command": f"PYTHONPATH=src python3 -m agent_architect_lab.cli environment-history --environment {environment}",
+                "purpose": f"Review recent lineage and rollback context for {environment}.",
+            }
+        )
+    return rows

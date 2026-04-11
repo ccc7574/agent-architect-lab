@@ -15,6 +15,7 @@ from agent_architect_lab.control_plane.maintenance import (
     restore_control_plane_backup,
     verify_control_plane_backup,
 )
+from agent_architect_lab.control_plane.reporting import export_release_runbook_report
 from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.control_plane.server import (
     build_governance_summary_payload,
@@ -355,6 +356,16 @@ def build_parser() -> argparse.ArgumentParser:
     export_governance_summary_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum number of overrides to include.")
     export_governance_summary_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/reports/governance-summary.md.")
     export_governance_summary_cmd.add_argument("--title", default="", help="Optional report title override.")
+    export_release_runbook_cmd = subparsers.add_parser(
+        "export-release-runbook",
+        help="Render an operator-facing release execution runbook with rollout, verification, and rollback steps.",
+    )
+    export_release_runbook_cmd.add_argument("release_name", help="Immutable release name.")
+    export_release_runbook_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
+    export_release_runbook_cmd.add_argument("--history-limit", type=int, default=10, help="Maximum lineage entries to include per environment.")
+    export_release_runbook_cmd.add_argument("--incident-limit", type=int, default=20, help="Maximum linked incidents to include.")
+    export_release_runbook_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/reports/release-runbook-<release>.md.")
+    export_release_runbook_cmd.add_argument("--title", default="", help="Optional report title override.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -1667,6 +1678,28 @@ def cmd_export_governance_summary(
     return 0
 
 
+def cmd_export_release_runbook(
+    release_name: str,
+    environments: list[str],
+    history_limit: int,
+    incident_limit: int,
+    output: str,
+    title: str,
+) -> int:
+    settings = load_settings()
+    result = export_release_runbook_report(
+        settings,
+        release_name=release_name,
+        environments=environments or settings.environment_names,
+        history_limit=history_limit,
+        incident_limit=incident_limit,
+        output=output,
+        title=title,
+    )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -1866,6 +1899,15 @@ def main() -> int:
             args.release_limit,
             args.incident_limit,
             args.override_limit,
+            args.output,
+            args.title,
+        )
+    if args.command == "export-release-runbook":
+        return cmd_export_release_runbook(
+            args.release_name,
+            args.environments,
+            args.history_limit,
+            args.incident_limit,
             args.output,
             args.title,
         )

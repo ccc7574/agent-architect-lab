@@ -112,6 +112,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/export-governance-summary`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
+- `POST /jobs/export-release-runbook`
 - `POST /jobs/backup-control-plane-storage`
 - `POST /jobs/verify-control-plane-backup`
 - `POST /jobs/restore-control-plane-backup`
@@ -227,6 +228,26 @@ curl \
     "release_limit": 20,
     "incident_limit": 20,
     "override_limit": 50
+  }'
+```
+
+Queue a release runbook export job:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-release-runbook-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-release-runbook \
+  -d '{
+    "release_name": "2026-04-10-main",
+    "title": "Release Runbook",
+    "output": "/tmp/release-runbook.md",
+    "history_limit": 10,
+    "incident_limit": 10
   }'
 ```
 

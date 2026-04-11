@@ -412,6 +412,34 @@ class ControlPlaneApp:
                         success_status_code=202,
                     )
                 )
+            if method == "POST" and path == "/jobs/export-release-runbook":
+                authorization, auth_error = authorize("write", "create_export_job")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="export_release_runbook",
+                            payload={
+                                "release_name": _required_string(payload, "release_name"),
+                                "environments": _optional_string_list(payload, "environments"),
+                                "history_limit": max(1, _optional_int(payload, "history_limit", default=10) or 10),
+                                "incident_limit": max(1, _optional_int(payload, "incident_limit", default=20) or 20),
+                                "output": _optional_string(payload, "output") or "",
+                                "title": _optional_string(payload, "title") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
             if method == "POST" and path == "/jobs/backup-control-plane-storage":
                 authorization, auth_error = authorize("write", "manage_storage")
                 if auth_error is not None:

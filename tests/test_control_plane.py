@@ -705,6 +705,74 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         thread.join(timeout=5)
 
 
+def test_control_plane_server_runs_release_runbook_export_job(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-release-runbook",
+            body=json.dumps(
+                {
+                    "release_name": "release-a",
+                    "title": "Async Release Runbook",
+                    "output": str(tmp_path / "async-runbook.md"),
+                    "history_limit": 5,
+                    "incident_limit": 5,
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-release-runbook-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] in {"succeeded", "failed"}:
+                break
+        connection.close()
+
+        assert create_response.status == 202
+        assert create_payload["status"] == "queued"
+        assert status_payload["status"] == "succeeded"
+        assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        assert "Async Release Runbook" in markdown
+        assert "## Execution Plan" in markdown
+        assert "release-status release-a" in markdown
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_control_plane_server_retries_failed_jobs(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     _seed_release_state()
