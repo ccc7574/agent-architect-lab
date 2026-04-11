@@ -162,6 +162,11 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(ControlPlaneResponse(200, build_control_plane_storage_status(self.settings)))
+            if method == "GET" and path == "/job-queue-status":
+                _authorization, auth_error = authorize("read", "read_jobs")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(ControlPlaneResponse(200, self.job_store.summarize_jobs()))
             if method == "GET" and path == "/ledger-storage-status":
                 _authorization, auth_error = authorize("read", "read_storage")
                 if auth_error is not None:

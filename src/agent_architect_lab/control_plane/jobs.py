@@ -157,6 +157,8 @@ class ControlPlaneJobRepository(Protocol):
 
     def get_job(self, job_id: str) -> ControlPlaneJob: ...
 
+    def summarize_jobs(self, *, now: str | None = None) -> dict[str, Any]: ...
+
     def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None: ...
 
     def heartbeat_job(self, job_id: str, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob: ...
@@ -237,6 +239,11 @@ class ControlPlaneJobStore:
             if job.job_id == job_id:
                 return job
         raise KeyError(f"Unknown job '{job_id}'.")
+
+    def summarize_jobs(self, *, now: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            registry = ControlPlaneJobRegistry.load(self.path)
+        return _job_summary(registry.jobs, now=now or utc_now_iso())
 
     def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None:
         with self._lock:
@@ -655,3 +662,68 @@ def _requeue_stale_jobs(registry: ControlPlaneJobRegistry, *, now: str) -> list[
         job.lease_expires_at = None
         rows.append(job)
     return rows
+
+
+def _job_summary(jobs: list[ControlPlaneJob], *, now: str) -> dict[str, Any]:
+    now_ts = _parse_timestamp(now)
+    counts_by_status: dict[str, int] = {}
+    running_by_worker: dict[str, dict[str, Any]] = {}
+    oldest_queued_at: str | None = None
+    stale_running_jobs: list[dict[str, Any]] = []
+    queued_jobs = 0
+    running_jobs = 0
+    for job in jobs:
+        counts_by_status[job.status] = counts_by_status.get(job.status, 0) + 1
+        if job.status == "queued":
+            queued_jobs += 1
+            if oldest_queued_at is None or (job.created_at, job.job_id) < (oldest_queued_at, job.job_id):
+                oldest_queued_at = job.created_at
+        if job.status == "running":
+            running_jobs += 1
+            worker_key = job.worker_id or "unassigned"
+            entry = running_by_worker.setdefault(
+                worker_key,
+                {"worker_id": worker_key, "running_jobs": 0, "job_ids": [], "lease_expires_at": None},
+            )
+            entry["running_jobs"] += 1
+            entry["job_ids"].append(job.job_id)
+            lease_expires_at = job.lease_expires_at
+            if lease_expires_at and (
+                entry["lease_expires_at"] is None or str(lease_expires_at) < str(entry["lease_expires_at"])
+            ):
+                entry["lease_expires_at"] = lease_expires_at
+            lease_deadline = _parse_timestamp(job.lease_expires_at)
+            if now_ts is not None and lease_deadline is not None and lease_deadline <= now_ts:
+                stale_running_jobs.append(
+                    {
+                        "job_id": job.job_id,
+                        "worker_id": job.worker_id,
+                        "lease_expires_at": job.lease_expires_at,
+                        "job_type": job.job_type,
+                    }
+                )
+    queued_age_s: float | None = None
+    if oldest_queued_at and now_ts is not None:
+        oldest_ts = _parse_timestamp(oldest_queued_at)
+        if oldest_ts is not None:
+            queued_age_s = max(0.0, round((now_ts - oldest_ts).total_seconds(), 3))
+    return {
+        "generated_at": now,
+        "totals": {
+            "jobs": len(jobs),
+            "queued_jobs": queued_jobs,
+            "running_jobs": running_jobs,
+            "stale_running_jobs": len(stale_running_jobs),
+        },
+        "counts_by_status": dict(sorted(counts_by_status.items())),
+        "oldest_queued_at": oldest_queued_at,
+        "oldest_queued_age_s": queued_age_s,
+        "running_workers": sorted(
+            running_by_worker.values(),
+            key=lambda item: (-int(item["running_jobs"]), str(item["worker_id"])),
+        ),
+        "stale_running_jobs": sorted(
+            stale_running_jobs,
+            key=lambda item: (str(item.get("lease_expires_at") or ""), str(item["job_id"])),
+        ),
+    }

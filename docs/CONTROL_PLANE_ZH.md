@@ -38,6 +38,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker --onc
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker --idle-timeout-s 30
 ```
 
+如果想不启动 HTTP server，直接在本地查看 queue depth：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-job-queue-status
+```
+
 这个服务只依赖 Python 标准库，底层仍然直接复用 CLI 使用的 artifact 存储。
 
 如果要切到 SQLite 持久化后端，可以增加：
@@ -113,6 +119,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /governance-summary?environment=production&release_limit=20&incident_limit=20&override_limit=50`
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
+- `GET /job-queue-status`
 - `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&route_policy_key=read_governance&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
 - `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`

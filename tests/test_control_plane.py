@@ -994,6 +994,54 @@ def test_control_plane_server_can_use_standalone_worker(monkeypatch, tmp_path: P
         thread.join(timeout=5)
 
 
+def test_control_plane_server_exposes_job_queue_status(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "backup.zip"), "label": "queue-http"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-queue-http",
+        operation_id=None,
+        max_attempts=1,
+    )
+    claimed = repositories.jobs.claim_next_job(worker_id="worker-http", lease_ttl_s=10.0)
+    assert claimed is not None
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "GET",
+            "/job-queue-status",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.close()
+
+        assert response.status == 200
+        assert payload["totals"]["jobs"] == 1
+        assert payload["totals"]["running_jobs"] == 1
+        assert payload["counts_by_status"]["running"] == 1
+        assert payload["running_workers"][0]["worker_id"] == "worker-http"
+        assert payload["running_workers"][0]["running_jobs"] == 1
+        assert payload["stale_running_jobs"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_control_plane_server_runs_weekly_status_export_job(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     _seed_release_state()

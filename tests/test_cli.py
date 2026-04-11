@@ -10,6 +10,7 @@ from agent_architect_lab.cli import (
     cmd_approve_release,
     cmd_backup_release_and_incident_ledgers,
     cmd_check_deploy_readiness,
+    cmd_control_plane_job_queue_status,
     cmd_environment_history,
     cmd_deploy_policy,
     cmd_deploy_release,
@@ -124,6 +125,31 @@ def test_cmd_run_control_plane_worker_processes_one_job(monkeypatch, tmp_path: P
     assert payload["status"] == "completed"
     assert payload["processed_jobs"] == 1
     assert jobs[0].status == "succeeded"
+
+
+def test_cmd_control_plane_job_queue_status_summarizes_jobs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "backup.zip"), "label": "queue-status"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-queue-status",
+        operation_id=None,
+        max_attempts=1,
+    )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_control_plane_job_queue_status()
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["totals"]["jobs"] == 1
+    assert payload["totals"]["queued_jobs"] == 1
+    assert payload["counts_by_status"]["queued"] == 1
 
 
 def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Path) -> None:

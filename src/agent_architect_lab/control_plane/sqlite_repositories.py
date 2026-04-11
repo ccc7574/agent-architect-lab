@@ -329,6 +329,14 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
             raise KeyError(f"Unknown job '{job_id}'.")
         return _job_from_row(row)
 
+    def summarize_jobs(self, *, now: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM control_plane_jobs ORDER BY created_at DESC, job_id DESC"
+                ).fetchall()
+        return _job_summary([_job_from_row(row) for row in rows], now=now or utc_now_iso())
+
     def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None:
         with self._lock:
             with self._connect() as connection:
