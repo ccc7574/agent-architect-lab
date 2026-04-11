@@ -19,6 +19,11 @@ from agent_architect_lab.control_plane.reporting import (
     export_operator_handoff_report,
     record_operator_handoff_snapshot,
 )
+from agent_architect_lab.harness.ledger_maintenance import (
+    backup_release_and_incident_ledgers,
+    restore_release_and_incident_ledger_backup,
+    verify_release_and_incident_ledger_backup,
+)
 from agent_architect_lab.models import utc_now_iso
 
 
@@ -357,6 +362,9 @@ def default_job_handlers() -> dict[str, JobHandler]:
         "backup_control_plane_storage": _handle_backup_control_plane_storage,
         "verify_control_plane_backup": _handle_verify_control_plane_backup,
         "restore_control_plane_backup": _handle_restore_control_plane_backup,
+        "backup_release_and_incident_ledgers": _handle_backup_release_and_incident_ledgers,
+        "verify_release_and_incident_ledger_backup": _handle_verify_release_and_incident_ledger_backup,
+        "restore_release_and_incident_ledger_backup": _handle_restore_release_and_incident_ledger_backup,
     }
 
 
@@ -410,6 +418,30 @@ def _handle_verify_control_plane_backup(settings: Settings, payload: JobPayload)
 
 def _handle_restore_control_plane_backup(settings: Settings, payload: JobPayload) -> dict[str, Any]:
     return restore_control_plane_backup(
+        settings,
+        backup_path=str(payload.get("backup_path", "")),
+        output_dir=str(payload.get("output_dir", "")),
+        label=str(payload.get("label", "")),
+    )
+
+
+def _handle_backup_release_and_incident_ledgers(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return backup_release_and_incident_ledgers(
+        settings,
+        output=str(payload.get("output", "")),
+        label=str(payload.get("label", "")),
+    )
+
+
+def _handle_verify_release_and_incident_ledger_backup(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return verify_release_and_incident_ledger_backup(
+        str(payload.get("backup_path", "")),
+        expected_sha256=str(payload.get("expected_sha256", "")),
+    )
+
+
+def _handle_restore_release_and_incident_ledger_backup(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return restore_release_and_incident_ledger_backup(
         settings,
         backup_path=str(payload.get("backup_path", "")),
         output_dir=str(payload.get("output_dir", "")),

@@ -85,6 +85,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 
 - `GET /health`
 - `GET /storage-status`
+- `GET /ledger-storage-status`
 - `GET /releases?limit=50`
 - `GET /releases/{release_name}`
 - `GET /release-risk-board?environment=staging&environment=production&limit=20`
@@ -114,6 +115,9 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /jobs/backup-control-plane-storage`
 - `POST /jobs/verify-control-plane-backup`
 - `POST /jobs/restore-control-plane-backup`
+- `POST /jobs/backup-release-and-incident-ledgers`
+- `POST /jobs/verify-release-and-incident-ledger-backup`
+- `POST /jobs/restore-release-and-incident-ledger-backup`
 - `POST /jobs/{job_id}/retry`
 
 ## 示例请求
@@ -136,6 +140,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/storage-status
+```
+
+在恢复演练前查看 release / incident ledger 的完整性：
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/ledger-storage-status
 ```
 
 创建 incident：
@@ -213,6 +227,23 @@ curl \
     "release_limit": 20,
     "incident_limit": 20,
     "override_limit": 50
+  }'
+```
+
+创建 release / incident ledger 备份任务：
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: ops-oncall-1" \
+  -H "X-Control-Plane-Role: ops-oncall" \
+  -H "Idempotency-Key: backup-release-ledgers-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/backup-release-and-incident-ledgers \
+  -d '{
+    "label": "nightly",
+    "output": "/tmp/release-ledgers-nightly.zip"
   }'
 ```
 

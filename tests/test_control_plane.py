@@ -11,13 +11,17 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from agent_architect_lab.cli import (
+    cmd_backup_release_and_incident_ledgers,
     cmd_backup_control_plane_storage,
     cmd_control_plane_storage_status,
+    cmd_ledger_storage_status,
     cmd_approve_release,
     cmd_open_incident,
+    cmd_restore_release_and_incident_ledger_backup,
     cmd_restore_control_plane_backup,
     cmd_run_evals,
     cmd_run_release_shadow,
+    cmd_verify_release_and_incident_ledger_backup,
     cmd_verify_control_plane_backup,
 )
 from agent_architect_lab.config import load_settings
@@ -1023,6 +1027,96 @@ def test_control_plane_server_reports_storage_status_and_runs_backup_job(monkeyp
         thread.join(timeout=5)
 
 
+def test_control_plane_server_reports_ledger_storage_status_and_runs_backup_job(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "GET",
+            "/ledger-storage-status",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        status_response = connection.getresponse()
+        status_payload = json.loads(status_response.read().decode("utf-8"))
+
+        connection.request(
+            "POST",
+            "/jobs/backup-release-and-incident-ledgers",
+            body=json.dumps(
+                {
+                    "label": "nightly",
+                    "output": str(tmp_path / "ledger-nightly.zip"),
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="backup-release-and-incident-ledgers-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        final_payload = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                final_payload = job_payload
+                break
+        connection.close()
+
+        backup_path = Path(final_payload["result_payload"]["saved_to"]) if final_payload is not None else None
+        assert status_response.status == 200
+        assert status_payload["kind"] == "release_and_incident_ledgers"
+        assert status_payload["counts"]["release_records"] == 1
+        assert status_payload["counts"]["incident_records"] == 1
+        assert status_payload["counts"]["release_manifests"] == 1
+        assert status_payload["integrity"]["valid"] is True
+        assert create_response.status == 202
+        assert final_payload is not None
+        assert final_payload["status"] == "succeeded"
+        assert backup_path is not None and backup_path.exists()
+        with zipfile.ZipFile(backup_path) as archive:
+            names = set(archive.namelist())
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert "releases/release-ledger.json" in names
+        assert "incidents/incident-ledger.json" in names
+        assert "releases/manifests/release-a.json" in names
+        assert manifest["kind"] == "release_and_incident_ledgers"
+        assert manifest["storage_status"]["counts"]["release_records"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_sqlite_control_plane_repositories_migrate_legacy_schema(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
     settings = load_settings()
@@ -1142,6 +1236,32 @@ def test_control_plane_storage_cli_status_and_backup(monkeypatch, tmp_path: Path
     assert manifest["backend"] == "sqlite"
 
 
+def test_ledger_storage_cli_status_and_backup(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+
+    status_stdout = io.StringIO()
+    with redirect_stdout(status_stdout):
+        assert cmd_ledger_storage_status() == 0
+    status_payload = json.loads(status_stdout.getvalue())
+
+    backup_stdout = io.StringIO()
+    backup_path = tmp_path / "cli-ledger-backup.zip"
+    with redirect_stdout(backup_stdout):
+        assert cmd_backup_release_and_incident_ledgers(str(backup_path), "cli") == 0
+    backup_payload = json.loads(backup_stdout.getvalue())
+
+    assert status_payload["kind"] == "release_and_incident_ledgers"
+    assert status_payload["counts"]["release_records"] == 1
+    assert status_payload["counts"]["incident_records"] == 1
+    assert status_payload["counts"]["release_manifests"] == 1
+    assert status_payload["integrity"]["valid"] is True
+    assert Path(backup_payload["saved_to"]).exists()
+    with zipfile.ZipFile(backup_path) as archive:
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+    assert manifest["kind"] == "release_and_incident_ledgers"
+
+
 def test_control_plane_backup_cli_verify_and_restore(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
     _seed_release_state()
@@ -1170,6 +1290,38 @@ def test_control_plane_backup_cli_verify_and_restore(monkeypatch, tmp_path: Path
     assert restore_payload["validation"]["validated"] is True
     assert (restore_dir / "manifest.json").exists()
     assert any(name.endswith(".sqlite3") for name in restore_payload["restored_files"])
+
+
+def test_ledger_backup_cli_verify_and_restore(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+
+    backup_stdout = io.StringIO()
+    backup_path = tmp_path / "verify-restore-ledgers.zip"
+    with redirect_stdout(backup_stdout):
+        assert cmd_backup_release_and_incident_ledgers(str(backup_path), "verify-restore") == 0
+    backup_payload = json.loads(backup_stdout.getvalue())
+
+    verify_stdout = io.StringIO()
+    with redirect_stdout(verify_stdout):
+        assert cmd_verify_release_and_incident_ledger_backup(str(backup_path), backup_payload["sha256"]) == 0
+    verify_payload = json.loads(verify_stdout.getvalue())
+
+    restore_stdout = io.StringIO()
+    restore_dir = tmp_path / "ledger-restore-drill"
+    with redirect_stdout(restore_stdout):
+        assert cmd_restore_release_and_incident_ledger_backup(str(backup_path), str(restore_dir), "drill") == 0
+    restore_payload = json.loads(restore_stdout.getvalue())
+
+    assert verify_payload["validated"] is True
+    assert verify_payload["archive_sha256"] == backup_payload["sha256"]
+    assert verify_payload["counts"]["release_records"] == 1
+    assert verify_payload["counts"]["incident_records"] == 1
+    assert verify_payload["counts"]["release_manifests"] == 1
+    assert restore_payload["validation"]["validated"] is True
+    assert (restore_dir / "manifest.json").exists()
+    assert (restore_dir / "releases" / "release-ledger.json").exists()
+    assert (restore_dir / "incidents" / "incident-ledger.json").exists()
 
 
 def test_control_plane_server_runs_backup_verify_and_restore_jobs(monkeypatch, tmp_path: Path) -> None:
@@ -1315,6 +1467,158 @@ def test_control_plane_server_runs_backup_verify_and_restore_jobs(monkeypatch, t
         assert restore_job["result_payload"]["validation"]["validated"] is True
         assert Path(restore_job["result_payload"]["restored_to"]).exists()
         assert (restore_dir / "manifest.json").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_runs_ledger_backup_verify_and_restore_jobs(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        backup_archive = tmp_path / "ops-ledger-backup.zip"
+        connection.request(
+            "POST",
+            "/jobs/backup-release-and-incident-ledgers",
+            body=json.dumps({"output": str(backup_archive), "label": "ops"}),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="backup-release-and-incident-ledgers-verify-restore-1",
+                ),
+            },
+        )
+        backup_response = connection.getresponse()
+        backup_payload = json.loads(backup_response.read().decode("utf-8"))
+        backup_job_id = backup_payload["job_id"]
+
+        backup_job = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{backup_job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                backup_job = job_payload
+                break
+
+        backup_result_path = backup_job["result_payload"]["saved_to"] if backup_job is not None else str(backup_archive)
+        backup_sha = backup_job["result_payload"]["sha256"] if backup_job is not None else ""
+
+        connection.request(
+            "POST",
+            "/jobs/verify-release-and-incident-ledger-backup",
+            body=json.dumps({"backup_path": backup_result_path, "expected_sha256": backup_sha}),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="verify-release-and-incident-ledger-backup-1",
+                ),
+            },
+        )
+        verify_response = connection.getresponse()
+        verify_payload = json.loads(verify_response.read().decode("utf-8"))
+        verify_job_id = verify_payload["job_id"]
+
+        verify_job = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{verify_job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                verify_job = job_payload
+                break
+
+        restore_dir = tmp_path / "ledger-restore-job"
+        connection.request(
+            "POST",
+            "/jobs/restore-release-and-incident-ledger-backup",
+            body=json.dumps(
+                {
+                    "backup_path": backup_result_path,
+                    "output_dir": str(restore_dir),
+                    "label": "restore-job",
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="ops-oncall-1",
+                    role="ops-oncall",
+                    idempotency_key="restore-release-and-incident-ledger-backup-1",
+                ),
+            },
+        )
+        restore_response = connection.getresponse()
+        restore_payload = json.loads(restore_response.read().decode("utf-8"))
+        restore_job_id = restore_payload["job_id"]
+
+        restore_job = None
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{restore_job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            job_response = connection.getresponse()
+            job_payload = json.loads(job_response.read().decode("utf-8"))
+            if job_payload["status"] == "succeeded":
+                restore_job = job_payload
+                break
+        connection.close()
+
+        assert backup_response.status == 202
+        assert backup_job is not None
+        assert Path(backup_result_path).exists()
+        assert verify_response.status == 202
+        assert verify_job is not None
+        assert verify_job["result_payload"]["validated"] is True
+        assert verify_job["result_payload"]["archive_sha256"] == backup_sha
+        assert verify_job["result_payload"]["counts"]["release_records"] == 1
+        assert restore_response.status == 202
+        assert restore_job is not None
+        assert restore_job["result_payload"]["validation"]["validated"] is True
+        assert Path(restore_job["result_payload"]["restored_to"]).exists()
+        assert (restore_dir / "manifest.json").exists()
+        assert (restore_dir / "releases" / "release-ledger.json").exists()
+        assert (restore_dir / "incidents" / "incident-ledger.json").exists()
     finally:
         server.shutdown()
         server.server_close()

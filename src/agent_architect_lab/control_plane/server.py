@@ -29,6 +29,7 @@ from agent_architect_lab.control_plane.storage import (
     IdempotencyRepository,
 )
 from agent_architect_lab.harness.incidents import get_incident_review_board, open_incident, transition_incident
+from agent_architect_lab.harness.ledger_maintenance import build_ledger_storage_status
 from agent_architect_lab.harness.ledger import (
     deploy_release,
     get_release_record,
@@ -151,6 +152,11 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(ControlPlaneResponse(200, build_control_plane_storage_status(self.settings)))
+            if method == "GET" and path == "/ledger-storage-status":
+                _authorization, auth_error = authorize("read", "read_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(ControlPlaneResponse(200, build_ledger_storage_status(self.settings)))
             if method == "GET" and path == "/release-risk-board":
                 _authorization, auth_error = authorize("read", "read_governance")
                 if auth_error is not None:
@@ -468,6 +474,79 @@ class ControlPlaneApp:
                         body=body,
                         handler=lambda payload: self._enqueue_job(
                             job_type="restore_control_plane_backup",
+                            payload={
+                                "backup_path": _required_string(payload, "backup_path"),
+                                "output_dir": _optional_string(payload, "output_dir") or "",
+                                "label": _optional_string(payload, "label") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/backup-release-and-incident-ledgers":
+                authorization, auth_error = authorize("write", "manage_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="backup_release_and_incident_ledgers",
+                            payload={
+                                "output": _optional_string(payload, "output") or "",
+                                "label": _optional_string(payload, "label") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/verify-release-and-incident-ledger-backup":
+                authorization, auth_error = authorize("write", "manage_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="verify_release_and_incident_ledger_backup",
+                            payload={
+                                "backup_path": _required_string(payload, "backup_path"),
+                                "expected_sha256": _optional_string(payload, "expected_sha256") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
+            if method == "POST" and path == "/jobs/restore-release-and-incident-ledger-backup":
+                authorization, auth_error = authorize("write", "restore_storage")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="restore_release_and_incident_ledger_backup",
                             payload={
                                 "backup_path": _required_string(payload, "backup_path"),
                                 "output_dir": _optional_string(payload, "output_dir") or "",
