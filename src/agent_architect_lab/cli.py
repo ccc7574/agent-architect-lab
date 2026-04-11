@@ -137,6 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
         "control-plane-job-queue-status",
         help="Show queue depth, running workers, and stale lease status for control-plane jobs.",
     )
+    control_plane_workers_cmd = subparsers.add_parser(
+        "control-plane-workers",
+        help="List registered control-plane workers and their heartbeat status.",
+    )
     backup_control_plane_storage_cmd = subparsers.add_parser(
         "backup-control-plane-storage",
         help="Create a point-in-time control-plane storage backup archive.",
@@ -903,6 +907,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
         repositories=repositories,
         managed_by_server=False,
     ).job_worker
+    worker.heartbeat_worker(status="running")
     payload: dict[str, object] = {
         "status": "running",
         "service": "agent-architect-lab-control-plane-worker",
@@ -915,6 +920,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
     }
     if once:
         processed = worker.run_once()
+        worker.mark_worker_stopped()
         payload["status"] = "completed"
         payload["processed_jobs"] = 1 if processed else 0
         print(json.dumps(payload, indent=2), flush=True)
@@ -923,6 +929,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
     try:
         if idle_timeout_s is not None:
             processed_jobs = worker.run_until_idle(idle_timeout_s)
+            worker.mark_worker_stopped()
             print(
                 json.dumps(
                     {
@@ -941,6 +948,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
             worker.run_once()
             time.sleep(worker.poll_interval_s)
     except KeyboardInterrupt:
+        worker.mark_worker_stopped()
         print(
             json.dumps(
                 {
@@ -966,6 +974,17 @@ def cmd_control_plane_job_queue_status() -> int:
     settings = load_settings()
     repositories = create_local_control_plane_repositories(settings)
     print(json.dumps(repositories.jobs.summarize_jobs(), indent=2))
+    return 0
+
+
+def cmd_control_plane_workers() -> int:
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    payload = {
+        "summary": repositories.workers.summarize_workers(),
+        "rows": [worker.to_dict() for worker in repositories.workers.list_workers(limit=100)],
+    }
+    print(json.dumps(payload, indent=2))
     return 0
 
 
@@ -2120,6 +2139,8 @@ def main() -> int:
         return cmd_control_plane_storage_status()
     if args.command == "control-plane-job-queue-status":
         return cmd_control_plane_job_queue_status()
+    if args.command == "control-plane-workers":
+        return cmd_control_plane_workers()
     if args.command == "backup-control-plane-storage":
         return cmd_backup_control_plane_storage(args.output, args.label)
     if args.command == "verify-control-plane-backup":

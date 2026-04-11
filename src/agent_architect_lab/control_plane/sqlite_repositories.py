@@ -10,13 +10,15 @@ from uuid import uuid4
 from agent_architect_lab.control_plane.jobs import (
     ControlPlaneJob,
     ControlPlaneJobRepository,
+    _job_summary,
     _lease_deadline,
 )
 from agent_architect_lab.control_plane.storage import AuditEvent, IdempotencyRecord
+from agent_architect_lab.control_plane.workers import ControlPlaneWorkerRecord, ControlPlaneWorkerRepository
 from agent_architect_lab.models import utc_now_iso
 
 
-CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 3
+CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 4
 _SCHEMA_NAME = "control_plane"
 
 
@@ -532,6 +534,118 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
         return _job_from_row(updated)
 
 
+class SQLiteControlPlaneWorkerStore(SQLiteRepositoryMixin, ControlPlaneWorkerRepository):
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self._initialize()
+
+    def _initialize(self) -> None:
+        with self._lock:
+            with self._connect() as connection:
+                _ensure_sqlite_control_plane_schema(connection)
+
+    def heartbeat_worker(
+        self,
+        *,
+        worker_id: str,
+        managed_by_server: bool,
+        poll_interval_s: float,
+        lease_ttl_s: float,
+        heartbeat_interval_s: float,
+        status: str = "running",
+    ) -> ControlPlaneWorkerRecord:
+        now = utc_now_iso()
+        with self._lock:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO control_plane_workers (
+                        worker_id,
+                        status,
+                        started_at,
+                        updated_at,
+                        last_heartbeat_at,
+                        managed_by_server,
+                        poll_interval_s,
+                        lease_ttl_s,
+                        heartbeat_interval_s
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(worker_id) DO UPDATE SET
+                        status = excluded.status,
+                        updated_at = excluded.updated_at,
+                        last_heartbeat_at = excluded.last_heartbeat_at,
+                        managed_by_server = excluded.managed_by_server,
+                        poll_interval_s = excluded.poll_interval_s,
+                        lease_ttl_s = excluded.lease_ttl_s,
+                        heartbeat_interval_s = excluded.heartbeat_interval_s
+                    """,
+                    (
+                        worker_id,
+                        status,
+                        now,
+                        now,
+                        now,
+                        1 if managed_by_server else 0,
+                        poll_interval_s,
+                        lease_ttl_s,
+                        heartbeat_interval_s,
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM control_plane_workers WHERE worker_id = ?",
+                    (worker_id,),
+                ).fetchone()
+        return _worker_from_row(row)
+
+    def stop_worker(self, worker_id: str) -> ControlPlaneWorkerRecord | None:
+        now = utc_now_iso()
+        with self._lock:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE control_plane_workers
+                    SET status = 'stopped',
+                        updated_at = ?,
+                        last_heartbeat_at = ?
+                    WHERE worker_id = ?
+                    """,
+                    (now, now, worker_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM control_plane_workers WHERE worker_id = ?",
+                    (worker_id,),
+                ).fetchone()
+        return _worker_from_row(row) if row is not None else None
+
+    def list_workers(self, *, status: str | None = None, limit: int = 50) -> list[ControlPlaneWorkerRecord]:
+        parameters: list[Any] = []
+        sql = "SELECT * FROM control_plane_workers"
+        if status is not None:
+            sql += " WHERE status = ?"
+            parameters.append(status)
+        sql += " ORDER BY updated_at DESC, worker_id DESC LIMIT ?"
+        parameters.append(limit)
+        with self._lock:
+            with self._connect() as connection:
+                rows = connection.execute(sql, parameters).fetchall()
+        return [_worker_from_row(row) for row in rows]
+
+    def summarize_workers(self) -> dict[str, Any]:
+        workers = self.list_workers(limit=1000)
+        counts_by_status: dict[str, int] = {}
+        for worker in workers:
+            counts_by_status[worker.status] = counts_by_status.get(worker.status, 0) + 1
+        return {
+            "generated_at": utc_now_iso(),
+            "totals": {
+                "workers": len(workers),
+                "running_workers": counts_by_status.get("running", 0),
+            },
+            "counts_by_status": dict(sorted(counts_by_status.items())),
+            "workers": [worker.to_dict() for worker in workers[:50]],
+        }
+
+
 def _ensure_sqlite_control_plane_schema(connection: sqlite3.Connection) -> int:
     _ensure_schema_meta_table(connection)
     current_version = _current_schema_version(connection)
@@ -546,6 +660,8 @@ def _ensure_sqlite_control_plane_schema(connection: sqlite3.Connection) -> int:
             _apply_schema_v2(connection)
         elif next_version == 3:
             _apply_schema_v3(connection)
+        elif next_version == 4:
+            _apply_schema_v4(connection)
         else:  # pragma: no cover - defensive future guard
             raise ValueError(f"Unsupported SQLite schema migration target: {next_version}")
         _write_schema_version(connection, next_version)
@@ -589,11 +705,13 @@ def _write_schema_version(connection: sqlite3.Connection, version: int) -> None:
 def _has_legacy_tables(connection: sqlite3.Connection) -> bool:
     return any(
         _has_table(connection, table_name)
-        for table_name in ("idempotency_records", "audit_events", "control_plane_jobs")
+        for table_name in ("idempotency_records", "audit_events", "control_plane_jobs", "control_plane_workers")
     )
 
 
 def _infer_legacy_schema_version(connection: sqlite3.Connection) -> int:
+    if _has_table(connection, "control_plane_workers"):
+        return 4
     if _has_column(connection, "audit_events", "route_policy_key"):
         if _has_column(connection, "control_plane_jobs", "worker_id"):
             return 3
@@ -695,6 +813,26 @@ def _apply_schema_v3(connection: sqlite3.Connection) -> None:
     _ensure_v1_indexes(connection)
 
 
+def _apply_schema_v4(connection: sqlite3.Connection) -> None:
+    _apply_schema_v3(connection)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS control_plane_workers (
+            worker_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_heartbeat_at TEXT NOT NULL,
+            managed_by_server INTEGER NOT NULL DEFAULT 0,
+            poll_interval_s REAL NOT NULL,
+            lease_ttl_s REAL NOT NULL,
+            heartbeat_interval_s REAL NOT NULL
+        )
+        """
+    )
+    _ensure_v1_indexes(connection)
+
+
 def _ensure_v1_indexes(connection: sqlite3.Connection) -> None:
     if _has_table(connection, "idempotency_records"):
         connection.execute(
@@ -729,6 +867,10 @@ def _ensure_v1_indexes(connection: sqlite3.Connection) -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_operation_id ON control_plane_jobs (operation_id)"
+        )
+    if _has_table(connection, "control_plane_workers"):
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workers_status_updated_at ON control_plane_workers (status, updated_at DESC, worker_id DESC)"
         )
 
 
@@ -832,6 +974,20 @@ def _job_from_row(row: sqlite3.Row) -> ControlPlaneJob:
         worker_id=_optional_text(row["worker_id"]) if "worker_id" in row.keys() else None,
         lease_expires_at=_optional_text(row["lease_expires_at"]) if "lease_expires_at" in row.keys() else None,
         heartbeat_at=_optional_text(row["heartbeat_at"]) if "heartbeat_at" in row.keys() else None,
+    )
+
+
+def _worker_from_row(row: sqlite3.Row) -> ControlPlaneWorkerRecord:
+    return ControlPlaneWorkerRecord(
+        worker_id=str(row["worker_id"]),
+        status=str(row["status"]),
+        started_at=str(row["started_at"]),
+        updated_at=str(row["updated_at"]),
+        last_heartbeat_at=str(row["last_heartbeat_at"]),
+        managed_by_server=bool(int(row["managed_by_server"])),
+        poll_interval_s=float(row["poll_interval_s"]),
+        lease_ttl_s=float(row["lease_ttl_s"]),
+        heartbeat_interval_s=float(row["heartbeat_interval_s"]),
     )
 
 

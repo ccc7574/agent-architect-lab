@@ -11,6 +11,7 @@ from agent_architect_lab.cli import (
     cmd_backup_release_and_incident_ledgers,
     cmd_check_deploy_readiness,
     cmd_control_plane_job_queue_status,
+    cmd_control_plane_workers,
     cmd_environment_history,
     cmd_deploy_policy,
     cmd_deploy_release,
@@ -125,6 +126,7 @@ def test_cmd_run_control_plane_worker_processes_one_job(monkeypatch, tmp_path: P
     assert payload["status"] == "completed"
     assert payload["processed_jobs"] == 1
     assert jobs[0].status == "succeeded"
+    assert repositories.workers.list_workers(limit=5)[0].status == "stopped"
 
 
 def test_cmd_control_plane_job_queue_status_summarizes_jobs(monkeypatch, tmp_path: Path) -> None:
@@ -150,6 +152,28 @@ def test_cmd_control_plane_job_queue_status_summarizes_jobs(monkeypatch, tmp_pat
     assert payload["totals"]["jobs"] == 1
     assert payload["totals"]["queued_jobs"] == 1
     assert payload["counts_by_status"]["queued"] == 1
+
+
+def test_cmd_control_plane_workers_lists_worker_registry(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.workers.heartbeat_worker(
+        worker_id="worker-test",
+        managed_by_server=False,
+        poll_interval_s=0.25,
+        lease_ttl_s=5.0,
+        heartbeat_interval_s=1.0,
+    )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_control_plane_workers()
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["summary"]["totals"]["workers"] == 1
+    assert payload["rows"][0]["worker_id"] == "worker-test"
 
 
 def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Path) -> None:

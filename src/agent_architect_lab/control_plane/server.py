@@ -28,6 +28,7 @@ from agent_architect_lab.control_plane.storage import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
+from agent_architect_lab.control_plane.workers import ControlPlaneWorkerRepository
 from agent_architect_lab.harness.feedback import build_feedback_summary, list_feedback, record_feedback
 from agent_architect_lab.harness.incidents import (
     get_incident_review_board,
@@ -96,6 +97,7 @@ class ControlPlaneApp:
     settings: Settings
     auth: ControlPlaneAuth
     job_store: ControlPlaneJobRepository
+    worker_store: ControlPlaneWorkerRepository
     job_worker: ControlPlaneJobWorker
     idempotency_repository: IdempotencyRepository
     audit_repository: AuditLogRepository
@@ -130,6 +132,7 @@ class ControlPlaneApp:
                         "status": "ok",
                         "service": "agent-architect-lab-control-plane",
                         "generated_at": utc_now_iso(),
+                        "worker_registry": self.worker_store.summarize_workers()["totals"],
                         "worker": {
                             "alive": self.job_worker.is_alive(),
                             "worker_id": self.job_worker.worker_id,
@@ -167,6 +170,19 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(ControlPlaneResponse(200, self.job_store.summarize_jobs()))
+            if method == "GET" and path == "/workers":
+                _authorization, auth_error = authorize("read", "read_jobs")
+                if auth_error is not None:
+                    return respond(auth_error)
+                status = _query_optional_string(query, "status", allowed={"running", "stopped"})
+                limit = _query_int(query, "limit", default=50, minimum=1)
+                rows = [worker.to_dict() for worker in self.worker_store.list_workers(status=status, limit=limit)]
+                return respond(
+                    ControlPlaneResponse(
+                        200,
+                        {"rows": rows, "total": len(rows), "summary": self.worker_store.summarize_workers()},
+                    )
+                )
             if method == "GET" and path == "/ledger-storage-status":
                 _authorization, auth_error = authorize("read", "read_storage")
                 if auth_error is not None:
@@ -1386,6 +1402,7 @@ def build_control_plane_app(
     job_worker = ControlPlaneJobWorker(
         settings=resolved_settings,
         store=resolved_repositories.jobs,
+        worker_repository=resolved_repositories.workers,
         managed_by_server=managed_by_server,
     )
     return ControlPlaneApp(
@@ -1395,6 +1412,7 @@ def build_control_plane_app(
             mutation_token=resolved_settings.control_plane_mutation_token,
         ),
         job_store=resolved_repositories.jobs,
+        worker_store=resolved_repositories.workers,
         job_worker=job_worker,
         idempotency_repository=resolved_repositories.idempotency,
         audit_repository=resolved_repositories.audit,

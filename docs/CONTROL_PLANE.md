@@ -44,6 +44,12 @@ To inspect queue depth locally without starting the HTTP server:
 PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-job-queue-status
 ```
 
+To inspect registered workers and their latest heartbeat locally:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-workers
+```
+
 The server is stdlib-only and keeps artifact storage exactly where the CLI keeps it.
 
 To switch the control plane to SQLite-backed persistence:
@@ -69,10 +75,13 @@ SQLite schema migrations run automatically on startup. The `/health` response ex
 - The audit log now records successful mutations plus authentication, authorization, identity, and payload-policy denials
 - Idempotency registry state is persisted in `artifacts/control-plane/idempotency-registry.json`
 - Long-running exports are persisted in `artifacts/control-plane/job-registry.json`
+- Worker heartbeats are persisted in `artifacts/control-plane/worker-registry.json`
 - Running jobs now also carry `worker_id`, `heartbeat_at`, and `lease_expires_at` so stale leases can be recovered
 - Every API response now includes `_meta.request_id` for correlation
 - Policy rejections now include structured `error.details` metadata for dashboards and audits
 - `/health` now reports whether the worker is server-managed or expected to run externally
+- `/health` now also reports worker-registry totals so dashboards can quickly spot embedded versus standalone worker coverage
+- Control-plane storage status, backup archives, restore drills, and SQLite counts now include the worker registry alongside jobs, idempotency, and audit state
 
 Default role policy keys:
 
@@ -120,6 +129,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /jobs?status=queued&job_type=export_governance_summary&request_id=req-...&operation_id=op-...&limit=50`
 - `GET /jobs/{job_id}`
 - `GET /job-queue-status`
+- `GET /workers?status=running&limit=50`
 - `GET /audit-events?request_id=req-...&operation_id=op-...&event_type=authorization_denied&error_code=missing_identity&route_policy_key=read_governance&actor=...&role=...&method=POST&path=/incidents/open&status_code=201&replayed=true&conflict=false&limit=100`
 - `GET /idempotency-records?method=POST&path=/jobs/export-governance-summary&operation_id=op-...&status_code=202&limit=100`
 - `GET /idempotency-records/{idempotency_key}`
@@ -172,6 +182,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/storage-status
+```
+
+Inspect registered workers and their last heartbeat timestamps:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/workers?status=running
 ```
 
 Inspect release and incident ledger integrity before a restore drill:

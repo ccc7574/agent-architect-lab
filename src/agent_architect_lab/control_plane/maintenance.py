@@ -54,6 +54,7 @@ def backup_control_plane_storage(
                 settings.control_plane_request_log_path,
                 settings.control_plane_idempotency_path,
                 settings.control_plane_job_registry_path,
+                settings.control_plane_worker_registry_path,
             ):
                 entry = _add_file_to_archive(
                     archive,
@@ -142,6 +143,7 @@ def _build_json_status(settings: Settings) -> dict[str, Any]:
         _file_status("mutation_audit_log", settings.control_plane_request_log_path, line_count=_count_non_empty_lines(settings.control_plane_request_log_path)),
         _file_status("idempotency_registry", settings.control_plane_idempotency_path, record_count=_json_mapping_count(settings.control_plane_idempotency_path, "records")),
         _file_status("job_registry", settings.control_plane_job_registry_path, record_count=_json_list_count(settings.control_plane_job_registry_path, "jobs")),
+        _file_status("worker_registry", settings.control_plane_worker_registry_path, record_count=_json_list_count(settings.control_plane_worker_registry_path, "workers")),
     ]
     return {
         "backend": "json",
@@ -152,6 +154,7 @@ def _build_json_status(settings: Settings) -> dict[str, Any]:
             "audit_events": files[0]["line_count"],
             "idempotency_records": files[1]["record_count"],
             "jobs": files[2]["record_count"],
+            "workers": files[3]["record_count"],
         },
     }
 
@@ -173,6 +176,7 @@ def _build_sqlite_status(settings: Settings) -> dict[str, Any]:
                 "audit_events": 0,
                 "idempotency_records": 0,
                 "jobs": 0,
+                "workers": 0,
             },
         }
     connection = sqlite3.connect(db_path)
@@ -194,6 +198,7 @@ def _build_sqlite_status(settings: Settings) -> dict[str, Any]:
                 "audit_events": _table_count(connection, "audit_events"),
                 "idempotency_records": _table_count(connection, "idempotency_records"),
                 "jobs": _table_count(connection, "control_plane_jobs"),
+                "workers": _table_count(connection, "control_plane_workers"),
             },
         }
     finally:
@@ -338,6 +343,7 @@ def _verify_json_backup_archive(
         "json/mutation-requests.jsonl",
         "json/idempotency-registry.json",
         "json/job-registry.json",
+        "json/worker-registry.json",
     }
     missing = sorted(name for name in required_names if name not in names)
     if missing:
@@ -349,6 +355,7 @@ def _verify_json_backup_archive(
     )
     idempotency_payload = json.loads(archive.read("json/idempotency-registry.json").decode("utf-8"))
     jobs_payload = json.loads(archive.read("json/job-registry.json").decode("utf-8"))
+    workers_payload = json.loads(archive.read("json/worker-registry.json").decode("utf-8"))
     return {
         "validated": True,
         "entries": entries,
@@ -356,6 +363,7 @@ def _verify_json_backup_archive(
             "audit_events": audit_events,
             "idempotency_records": len(idempotency_payload.get("records", {})),
             "jobs": len(jobs_payload.get("jobs", [])),
+            "workers": len(workers_payload.get("workers", [])),
         },
     }
 
@@ -378,6 +386,7 @@ def _validate_restored_backup(destination: Path, *, backend: str) -> dict[str, A
                 "audit_events": _table_count(connection, "audit_events"),
                 "idempotency_records": _table_count(connection, "idempotency_records"),
                 "jobs": _table_count(connection, "control_plane_jobs"),
+                "workers": _table_count(connection, "control_plane_workers"),
             }
         finally:
             connection.close()
@@ -396,6 +405,7 @@ def _validate_restored_backup(destination: Path, *, backend: str) -> dict[str, A
     audit_events = _count_non_empty_lines(json_dir / "mutation-requests.jsonl")
     idempotency_records = _json_mapping_count(json_dir / "idempotency-registry.json", "records")
     jobs = _json_list_count(json_dir / "job-registry.json", "jobs")
+    workers = _json_list_count(json_dir / "worker-registry.json", "workers")
     return {
         "validated": True,
         "backend": backend,
@@ -404,5 +414,6 @@ def _validate_restored_backup(destination: Path, *, backend: str) -> dict[str, A
             "audit_events": audit_events,
             "idempotency_records": idempotency_records,
             "jobs": jobs,
+            "workers": workers,
         },
     }

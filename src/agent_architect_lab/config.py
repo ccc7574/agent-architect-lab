@@ -18,6 +18,7 @@ class Settings:
     control_plane_request_log_path: Path
     control_plane_idempotency_path: Path
     control_plane_job_registry_path: Path
+    control_plane_worker_registry_path: Path
     traces_dir: Path
     reports_dir: Path
     checkpoints_dir: Path
@@ -92,6 +93,7 @@ def load_settings() -> Settings:
     control_plane_request_log_path = control_plane_dir / "mutation-requests.jsonl"
     control_plane_idempotency_path = control_plane_dir / "idempotency-registry.json"
     control_plane_job_registry_path = control_plane_dir / "job-registry.json"
+    control_plane_worker_registry_path = control_plane_dir / "worker-registry.json"
     traces_dir = artifacts_dir / "traces"
     reports_dir = artifacts_dir / "reports"
     checkpoints_dir = artifacts_dir / "checkpoints"
@@ -321,6 +323,7 @@ def load_settings() -> Settings:
         control_plane_request_log_path=control_plane_request_log_path,
         control_plane_idempotency_path=control_plane_idempotency_path,
         control_plane_job_registry_path=control_plane_job_registry_path,
+        control_plane_worker_registry_path=control_plane_worker_registry_path,
         traces_dir=traces_dir,
         reports_dir=reports_dir,
         checkpoints_dir=checkpoints_dir,

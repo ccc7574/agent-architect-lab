@@ -24,6 +24,7 @@ from agent_architect_lab.control_plane.reporting import (
     export_weekly_status_report,
     record_operator_handoff_snapshot,
 )
+from agent_architect_lab.control_plane.workers import ControlPlaneWorkerRepository
 from agent_architect_lab.harness.ledger_maintenance import (
     backup_release_and_incident_ledgers,
     restore_release_and_incident_ledger_backup,
@@ -364,12 +365,14 @@ class ControlPlaneJobWorker:
         *,
         settings: Settings,
         store: ControlPlaneJobRepository,
+        worker_repository: ControlPlaneWorkerRepository | None = None,
         handlers: dict[str, JobHandler] | None = None,
         poll_interval_s: float | None = None,
         managed_by_server: bool = True,
     ) -> None:
         self.settings = settings
         self.store = store
+        self.worker_repository = worker_repository
         self.handlers = handlers or default_job_handlers()
         self.poll_interval_s = poll_interval_s if poll_interval_s is not None else settings.control_plane_job_poll_interval_s
         self.lease_ttl_s = settings.control_plane_job_lease_ttl_s
@@ -382,6 +385,7 @@ class ControlPlaneJobWorker:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        self._heartbeat_worker(status="running")
         self._thread = Thread(target=self._run, name="control-plane-job-worker", daemon=True)
         self._thread.start()
 
@@ -389,16 +393,25 @@ class ControlPlaneJobWorker:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        self._mark_worker_stopped()
 
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def heartbeat_worker(self, *, status: str = "running") -> None:
+        self._heartbeat_worker(status=status)
+
+    def mark_worker_stopped(self) -> None:
+        self._mark_worker_stopped()
+
     def _run(self) -> None:
         while not self._stop_event.is_set():
+            self._heartbeat_worker(status="running")
             if not self.run_once():
                 self._stop_event.wait(self.poll_interval_s)
 
     def run_once(self) -> bool:
+        self._heartbeat_worker(status="running")
         self.store.requeue_stale_jobs()
         job = self.store.claim_next_job(worker_id=self.worker_id, lease_ttl_s=self.lease_ttl_s)
         if job is None:
@@ -410,6 +423,7 @@ class ControlPlaneJobWorker:
         idle_started_at = time.monotonic()
         processed_jobs = 0
         while not self._stop_event.is_set():
+            self._heartbeat_worker(status="running")
             processed = self.run_once()
             if processed:
                 processed_jobs += 1
@@ -459,6 +473,7 @@ class ControlPlaneJobWorker:
     def _heartbeat_loop(self, job_id: str, stop_event: Event) -> None:
         while not stop_event.wait(self.heartbeat_interval_s):
             try:
+                self._heartbeat_worker(status="running")
                 self.store.heartbeat_job(
                     job_id,
                     worker_id=self.worker_id,
@@ -466,6 +481,23 @@ class ControlPlaneJobWorker:
                 )
             except Exception:  # pragma: no cover - defensive background boundary
                 return
+
+    def _heartbeat_worker(self, *, status: str) -> None:
+        if self.worker_repository is None:
+            return
+        self.worker_repository.heartbeat_worker(
+            worker_id=self.worker_id,
+            managed_by_server=self.managed_by_server,
+            poll_interval_s=self.poll_interval_s,
+            lease_ttl_s=self.lease_ttl_s,
+            heartbeat_interval_s=self.heartbeat_interval_s,
+            status=status,
+        )
+
+    def _mark_worker_stopped(self) -> None:
+        if self.worker_repository is None:
+            return
+        self.worker_repository.stop_worker(self.worker_id)
 
 
 def default_job_handlers() -> dict[str, JobHandler]:
