@@ -102,17 +102,24 @@ class HeuristicPlanner(PlannerProvider):
                 matches = result.get("matches", [])
                 if matches:
                     top_match = matches[0]
+                    display_title = top_match.get("metadata", {}).get("title", top_match["title"])
+                    domains = top_match.get("metadata", {}).get("domains", [])
+                    provenance = top_match.get("provenance", {})
                     if any(skill in self.NOTE_BACKED_SKILLS for skill in selected_skills):
                         return PlannerDecision(
                             action_type="tool",
-                            rationale=f"Read the full note for richer grounded context on {top_match['title']}.",
+                            rationale=f"Read the full note for richer grounded context on {display_title}.",
                             tool_name="get_note",
-                            tool_arguments={"note_id": top_match["title"]},
+                            tool_arguments={"note_id": top_match.get("metadata", {}).get("note_id", top_match["title"])},
                         )
                     return PlannerDecision(
                         action_type="answer",
                         rationale="The note search found a relevant passage.",
-                        final_answer=f"{top_match['title']}: {top_match['snippet']}",
+                        final_answer=(
+                            f"Source note '{display_title}'"
+                            f"{' [' + ', '.join(domains) + ']' if domains else ''}: {top_match['snippet']}"
+                            f" (matched_terms={', '.join(provenance.get('matched_terms', [])) or 'n/a'})"
+                        ),
                     )
                 return PlannerDecision(
                     action_type="answer",
@@ -122,11 +129,17 @@ class HeuristicPlanner(PlannerProvider):
 
             if tool_name == "get_note":
                 content = result.get("content", "")
+                metadata = result.get("metadata", {})
                 preview = " ".join(content.split())[:400]
+                domains = metadata.get("domains", [])
+                display_title = metadata.get("title", result.get("title"))
                 return PlannerDecision(
                     action_type="answer",
                     rationale="The full note is available, so respond with a grounded synthesis.",
-                    final_answer=f"{result.get('title')}: {preview}",
+                    final_answer=(
+                        f"Source note '{display_title}'"
+                        f"{' [' + ', '.join(domains) + ']' if domains else ''}: {preview}"
+                    ),
                 )
 
         if any(term in goal for term in ("run ", "execute ", "shell", "command")):

@@ -16,6 +16,13 @@ def test_runtime_uses_skill_routing_for_note_backed_retrieval() -> None:
     assert "memory_retrieval_designer" in trace.selected_skills
     assert tool_names == ["search_notes", "get_note"]
     assert trace.status == "completed"
+    search_result = trace.steps[0].tool_call.result
+    assert search_result["matches"][0]["provenance"]["source_type"] == "note"
+    assert "retrieval" in search_result["matches"][0]["metadata"]["domains"]
+    get_note_result = trace.steps[1].tool_call.result
+    assert get_note_result["provenance"]["source_type"] == "note"
+    assert "summary" in get_note_result["metadata"]
+    assert "Source note" in (trace.final_answer or "")
 
 
 def test_runtime_requires_approval_for_high_risk_production_actions() -> None:

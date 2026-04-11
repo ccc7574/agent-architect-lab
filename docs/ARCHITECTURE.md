@@ -60,9 +60,9 @@ MCP note retrieval path:
 goal mentions memory / retrieval / principles
   -> HeuristicPlanner selects search_notes
   -> MCPToolAdapter invokes MCPClient
-  -> local MCP server searches data/notes
+  -> local MCP server ranks data/notes with metadata and domain hints
   -> top note can trigger get_note
-  -> runtime emits a grounded answer and stores artifacts
+  -> runtime emits a grounded answer with note provenance and stores artifacts
 ```
 
 Eval path:
@@ -85,6 +85,7 @@ JSONL dataset
 - Traces and checkpoints are persisted every step.
 - MCP is modeled as a protocol boundary, not just another direct function call.
 - Skills now influence retrieval-first routing for architecture tasks.
+- Retrieval now carries source metadata and provenance-rich ranking rather than only plain-text snippets.
 - Harness reports can be compared and checked against release gates.
 - Planner provider selection is now explicit in config rather than hard-coded.
 
@@ -93,7 +94,7 @@ JSONL dataset
 - The planner is heuristic, not model-backed.
 - The model-backed provider scaffold is present and now has a bounded shadow-validation harness, but the default end-to-end suite still stays deterministic.
 - Skill routing is intentionally lightweight and mostly note-backed.
-- Notes retrieval is still local and lexical rather than embedding-based.
+- Notes retrieval is now metadata-aware and provenance-aware, but still local and not embedding-based.
 - There is no scheduler, queue, or operator workflow layer.
 - There is now a bounded role-handoff release orchestration example, but not a general distributed multi-agent worker plane.
 
