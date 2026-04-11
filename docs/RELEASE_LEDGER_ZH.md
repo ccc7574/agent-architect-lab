@@ -10,6 +10,8 @@
   保存可变的操作账本，记录审批、部署、回滚、重新激活、override 等运行期动作。
 - `artifacts/incidents/incident-ledger.json`
   保存可变的 incident 账本，记录事故状态推进、责任人、关联 release 和 follow-up artifact。
+- `artifacts/feedback/feedback-ledger.json`
+  保存显式的人类评审反馈，可关联 release、incident、report、run 或其他 artifact。
 
 账本备份与恢复演练产物会落在：
 
@@ -177,6 +179,20 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle inciden
 ```
 
 现在生成的 bundle-manifest 还会带 artifact lineage，尽可能回连 release evidence、runtime-realism artifact，以及可用的 trace/checkpoint 文件。
+
+记录一条绑定到 release 或 incident 的显式 human feedback：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli record-feedback \
+  --summary "release 仍然缺少 rollback 证据" \
+  --actor release-manager-1 \
+  --role release-manager \
+  --sentiment negative \
+  --actionability followup_required \
+  --target-kind release \
+  --release-name 2026-04-10-main \
+  --label rollback
+```
 
 查看 override 整改优先级看板：
 

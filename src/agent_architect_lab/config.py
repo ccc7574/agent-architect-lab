@@ -23,10 +23,12 @@ class Settings:
     checkpoints_dir: Path
     handoffs_dir: Path
     incidents_dir: Path
+    feedback_dir: Path
     releases_dir: Path
     release_manifests_dir: Path
     release_ledger_path: Path
     incident_ledger_path: Path
+    feedback_ledger_path: Path
     notes_dir: Path
     skills_dir: Path
     datasets_dir: Path
@@ -93,10 +95,12 @@ def load_settings() -> Settings:
     checkpoints_dir = artifacts_dir / "checkpoints"
     handoffs_dir = artifacts_dir / "handoffs"
     incidents_dir = artifacts_dir / "incidents"
+    feedback_dir = artifacts_dir / "feedback"
     releases_dir = artifacts_dir / "releases"
     release_manifests_dir = releases_dir / "manifests"
     release_ledger_path = releases_dir / "release-ledger.json"
     incident_ledger_path = incidents_dir / "incident-ledger.json"
+    feedback_ledger_path = feedback_dir / "feedback-ledger.json"
     notes_dir = project_root / "data" / "notes"
     skills_dir = project_root / "data" / "skills"
     datasets_dir = project_root / "src" / "agent_architect_lab" / "evals" / "datasets"
@@ -185,6 +189,13 @@ def load_settings() -> Settings:
                         "release-manager",
                         "ops-oncall",
                         "incident-commander",
+                    ],
+                    "write_feedback": [
+                        "control-plane-admin",
+                        "release-manager",
+                        "ops-oncall",
+                        "incident-commander",
+                        "qa-owner",
                     ],
                 }
             ),
@@ -284,6 +295,7 @@ def load_settings() -> Settings:
         checkpoints_dir,
         handoffs_dir,
         incidents_dir,
+        feedback_dir,
         releases_dir,
         release_manifests_dir,
         notes_dir,
@@ -306,10 +318,12 @@ def load_settings() -> Settings:
         checkpoints_dir=checkpoints_dir,
         handoffs_dir=handoffs_dir,
         incidents_dir=incidents_dir,
+        feedback_dir=feedback_dir,
         releases_dir=releases_dir,
         release_manifests_dir=release_manifests_dir,
         release_ledger_path=release_ledger_path,
         incident_ledger_path=incident_ledger_path,
+        feedback_ledger_path=feedback_ledger_path,
         notes_dir=notes_dir,
         skills_dir=skills_dir,
         datasets_dir=datasets_dir,

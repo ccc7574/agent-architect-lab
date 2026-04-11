@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_architect_lab.agent.orchestration import build_release_command_brief
-from agent_architect_lab.cli import cmd_grant_release_override, cmd_open_incident, cmd_run_evals, cmd_run_release_shadow
+from agent_architect_lab.cli import cmd_grant_release_override, cmd_open_incident, cmd_record_feedback, cmd_run_evals, cmd_run_release_shadow
 from agent_architect_lab.harness.planner_shadow import run_planner_shadow_experiment
 from agent_architect_lab.harness.suite import ExperimentSuite
 from agent_architect_lab.llm.base import PlannerProvider
@@ -88,6 +88,21 @@ def test_build_release_command_brief_combines_role_packets(monkeypatch, tmp_path
         "",
         "needs containment",
     )
+    cmd_record_feedback(
+        "release review still needs rollback proof",
+        "qa-owner-1",
+        "qa-owner",
+        "negative",
+        "followup_required",
+        "release",
+        "release-runtime",
+        "",
+        "",
+        "",
+        "",
+        ["rollback"],
+        "",
+    )
 
     brief = build_release_command_brief("release-runtime")
 
@@ -101,6 +116,7 @@ def test_build_release_command_brief_combines_role_packets(monkeypatch, tmp_path
     ]
     assert any("Blocked environment" in blocker for blocker in brief.roles[1].blockers)
     assert any("Unresolved incident" in blocker for blocker in brief.roles[2].blockers)
+    assert any("Human feedback load" in finding for finding in brief.roles[3].findings)
     kinds = {entry["kind"] for entry in brief.lineage["artifacts"]}
     assert "release_manifest" in kinds
     assert "candidate_report" in kinds

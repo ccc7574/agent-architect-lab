@@ -58,6 +58,6 @@ This matrix reflects the capability profile increasingly expected from senior an
 
 - hosted planner execution in end-to-end release paths, not only first-step shadow validation
 - online shadow evaluation and live-runtime policy backtesting
-- explicit human feedback ingestion
+- automated learning from human feedback, not only ledger capture
 - true multi-agent execution ownership
 - deeper provenance-aware retrieval beyond local lexical note search

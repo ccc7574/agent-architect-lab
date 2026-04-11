@@ -18,6 +18,10 @@ Under `artifacts/incidents`:
 
 - `incident-ledger.json`: mutable incident state and response history
 
+Under `artifacts/feedback`:
+
+- `feedback-ledger.json`: explicit human review and operator feedback linked to releases, incidents, reports, runs, or artifacts
+
 Backup and restore drill artifacts are stored under:
 
 - `artifacts/ledger-backups`: point-in-time backup archives
@@ -222,6 +226,20 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle inciden
 ```
 
 The bundle manifest now also includes artifact lineage back to release evidence, runtime-realism artifacts, and trace/checkpoint files when those sources are available.
+
+Record explicit human feedback tied to a release or incident:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli record-feedback \
+  --summary "release still needs rollback proof" \
+  --actor release-manager-1 \
+  --role release-manager \
+  --sentiment negative \
+  --actionability followup_required \
+  --target-kind release \
+  --release-name 2026-04-10-main \
+  --label rollback
+```
 
 Inspect override cleanup priority across releases:
 

@@ -29,6 +29,7 @@ from agent_architect_lab.control_plane.repositories import create_local_control_
 from agent_architect_lab.control_plane.server import create_control_plane_server
 from agent_architect_lab.evals.tasks import list_available_suites, load_default_suite, load_suite
 from agent_architect_lab.harness.compare import compare_reports
+from agent_architect_lab.harness.feedback import build_feedback_summary, build_related_feedback, list_feedback, record_feedback
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import (
     get_incident_record,
@@ -216,6 +217,37 @@ def build_parser() -> argparse.ArgumentParser:
     export_incident_bundle_cmd = subparsers.add_parser("export-incident-bundle", help="Export an incident bundle with incident report, release context, and related handoff artifacts.")
     export_incident_bundle_cmd.add_argument("incident_id", help="Incident identifier.")
     export_incident_bundle_cmd.add_argument("--output-dir", default="", help="Optional output directory. Defaults to artifacts/incidents/bundles/<incident_id>.")
+
+    record_feedback_cmd = subparsers.add_parser("record-feedback", help="Record explicit human feedback tied to a release, incident, report, run, or artifact.")
+    record_feedback_cmd.add_argument("--summary", required=True, help="Short human feedback summary.")
+    record_feedback_cmd.add_argument("--actor", required=True, help="Reviewer or operator identity.")
+    record_feedback_cmd.add_argument("--role", required=True, help="Reviewer or operator role.")
+    record_feedback_cmd.add_argument("--sentiment", required=True, choices=["positive", "neutral", "negative"], help="Overall sentiment of the feedback.")
+    record_feedback_cmd.add_argument("--actionability", default="observe", choices=["observe", "followup_required", "urgent_followup"], help="Whether the feedback requires follow-up.")
+    record_feedback_cmd.add_argument("--target-kind", required=True, help="What the feedback targets, for example release, incident, report, run, planner_shadow, or runbook.")
+    record_feedback_cmd.add_argument("--release-name", default="", help="Optional linked release.")
+    record_feedback_cmd.add_argument("--incident-id", default="", help="Optional linked incident.")
+    record_feedback_cmd.add_argument("--report-path", default="", help="Optional linked report path.")
+    record_feedback_cmd.add_argument("--run-id", default="", help="Optional linked run identifier.")
+    record_feedback_cmd.add_argument("--artifact-path", default="", help="Optional linked artifact path.")
+    record_feedback_cmd.add_argument("--label", dest="labels", action="append", default=[], help="Optional feedback label. Repeat for multiple values.")
+    record_feedback_cmd.add_argument("--notes", default="", help="Optional longer notes.")
+
+    list_feedback_cmd = subparsers.add_parser("list-feedback", help="List recorded human feedback with optional filters.")
+    list_feedback_cmd.add_argument("--target-kind", default="", help="Optional target kind filter.")
+    list_feedback_cmd.add_argument("--release-name", default="", help="Optional release filter.")
+    list_feedback_cmd.add_argument("--incident-id", default="", help="Optional incident filter.")
+    list_feedback_cmd.add_argument("--run-id", default="", help="Optional run filter.")
+    list_feedback_cmd.add_argument("--sentiment", default="", choices=["", "positive", "neutral", "negative"], help="Optional sentiment filter.")
+    list_feedback_cmd.add_argument("--actionability", default="", choices=["", "observe", "followup_required", "urgent_followup"], help="Optional actionability filter.")
+    list_feedback_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of feedback records to return.")
+
+    feedback_summary_cmd = subparsers.add_parser("feedback-summary", help="Summarize recorded human feedback across the current ledger.")
+    feedback_summary_cmd.add_argument("--target-kind", default="", help="Optional target kind filter.")
+    feedback_summary_cmd.add_argument("--release-name", default="", help="Optional release filter.")
+    feedback_summary_cmd.add_argument("--incident-id", default="", help="Optional incident filter.")
+    feedback_summary_cmd.add_argument("--run-id", default="", help="Optional run filter.")
+    feedback_summary_cmd.add_argument("--limit", type=int, default=20, help="Maximum number of recent feedback records to include.")
 
     incident_review_board_cmd = subparsers.add_parser("incident-review-board", help="Show unresolved incident priority and stale incident queues.")
     incident_review_board_cmd.add_argument("--status", default="", choices=["", "open", "acknowledged", "contained", "resolved", "closed"], help="Optional status filter.")
@@ -541,6 +573,86 @@ def cmd_incident_status(incident_id: str) -> int:
     return 0
 
 
+def cmd_record_feedback(
+    summary: str,
+    actor: str,
+    role: str,
+    sentiment: str,
+    actionability: str,
+    target_kind: str,
+    release_name: str,
+    incident_id: str,
+    report_path: str,
+    run_id: str,
+    artifact_path: str,
+    labels: list[str],
+    notes: str,
+) -> int:
+    settings = load_settings()
+    record = record_feedback(
+        actor=actor,
+        role=role,
+        sentiment=sentiment,
+        actionability=actionability,
+        target_kind=target_kind,
+        summary=summary,
+        ledger_path=settings.feedback_ledger_path,
+        release_name=release_name or None,
+        incident_id=incident_id or None,
+        report_path=report_path or None,
+        run_id=run_id or None,
+        artifact_path=artifact_path or None,
+        labels=labels,
+        notes=notes,
+    )
+    print(json.dumps(record.to_dict(), indent=2))
+    return 0
+
+
+def cmd_list_feedback(
+    target_kind: str,
+    release_name: str,
+    incident_id: str,
+    run_id: str,
+    sentiment: str,
+    actionability: str,
+    limit: int,
+) -> int:
+    settings = load_settings()
+    rows = list_feedback(
+        ledger_path=settings.feedback_ledger_path,
+        target_kind=target_kind or None,
+        release_name=release_name or None,
+        incident_id=incident_id or None,
+        run_id=run_id or None,
+        sentiment=sentiment or None,
+        actionability=actionability or None,
+        limit=limit,
+    )
+    print(json.dumps([row.to_dict() for row in rows], indent=2))
+    return 0
+
+
+def cmd_feedback_summary(
+    target_kind: str,
+    release_name: str,
+    incident_id: str,
+    run_id: str,
+    limit: int,
+) -> int:
+    settings = load_settings()
+    payload = build_feedback_summary(
+        ledger_path=settings.feedback_ledger_path,
+        target_kind=target_kind or None,
+        release_name=release_name or None,
+        incident_id=incident_id or None,
+        run_id=run_id or None,
+        limit=limit,
+    )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def _render_incident_markdown(record: dict, *, title: str) -> str:
     lines = [
         f"# {title}",
@@ -657,6 +769,13 @@ def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
             followup_eval_bundle_path = followup_dir / candidate_path.name
             shutil.copy2(candidate_path, followup_eval_bundle_path)
 
+    related_feedback = build_related_feedback(
+        ledger_path=settings.feedback_ledger_path,
+        release_name=incident_record.get("release_name"),
+        incident_ids=[incident_id],
+        limit=20,
+    )
+
     manifest = {
         "incident": incident_record,
         "incident_report_path": str(incident_report_path),
@@ -668,6 +787,7 @@ def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
         "release_record": release_record,
         "related_handoff_snapshot_path": str(handoff_snapshot_path) if handoff_snapshot_path else None,
         "related_handoff_report_path": str(handoff_report_path) if handoff_report_path else None,
+        "related_feedback": related_feedback,
     }
     manifest_path = bundle_dir / "bundle-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -1946,6 +2066,40 @@ def main() -> int:
         return cmd_export_incident_report(args.incident_id, args.output, args.title)
     if args.command == "export-incident-bundle":
         return cmd_export_incident_bundle(args.incident_id, args.output_dir)
+    if args.command == "record-feedback":
+        return cmd_record_feedback(
+            args.summary,
+            args.actor,
+            args.role,
+            args.sentiment,
+            args.actionability,
+            args.target_kind,
+            args.release_name,
+            args.incident_id,
+            args.report_path,
+            args.run_id,
+            args.artifact_path,
+            args.labels,
+            args.notes,
+        )
+    if args.command == "list-feedback":
+        return cmd_list_feedback(
+            args.target_kind,
+            args.release_name,
+            args.incident_id,
+            args.run_id,
+            args.sentiment,
+            args.actionability,
+            args.limit,
+        )
+    if args.command == "feedback-summary":
+        return cmd_feedback_summary(
+            args.target_kind,
+            args.release_name,
+            args.incident_id,
+            args.run_id,
+            args.limit,
+        )
     if args.command == "incident-review-board":
         return cmd_incident_review_board(args.status, args.limit)
     if args.command == "evaluate-promotion":

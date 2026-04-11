@@ -15,6 +15,7 @@ from agent_architect_lab.cli import (
     cmd_deploy_release,
     cmd_environment_status,
     cmd_explain_patterns,
+    cmd_feedback_summary,
     cmd_incident_review_board,
     cmd_incident_status,
     cmd_link_incident_followup_eval,
@@ -35,6 +36,7 @@ from agent_architect_lab.cli import (
     cmd_operator_handoff,
     cmd_override_review_board,
     cmd_promote_release,
+    cmd_record_feedback,
     cmd_record_operator_handoff,
     cmd_register_report,
     cmd_revoke_release_override,
@@ -49,6 +51,7 @@ from agent_architect_lab.cli import (
     cmd_run_release_shadow,
     cmd_show_operator_handoff,
     cmd_transition_incident,
+    cmd_list_feedback,
     cmd_restore_release_and_incident_ledger_backup,
     cmd_verify_release_and_incident_ledger_backup,
 )
@@ -243,6 +246,21 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
             "incident-commander",
             "attach eval before closure",
         )
+        cmd_record_feedback(
+            "incident commander wants stronger rollback evidence",
+            "incident-commander",
+            "incident-commander",
+            "negative",
+            "followup_required",
+            "incident",
+            "release-a",
+            open_payload["incident_id"],
+            "",
+            "",
+            "",
+            ["rollback"],
+            "",
+        )
 
     with redirect_stdout(io.StringIO()):
         cmd_record_operator_handoff([], 10, 10, "incident-shift")
@@ -280,6 +298,7 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
     assert manifest["followup_eval_bundle_path"] is not None
     assert manifest["related_handoff_snapshot_path"] is not None
     assert manifest["related_handoff_report_path"] is not None
+    assert manifest["related_feedback"][0]["incident_id"] == open_payload["incident_id"]
     kinds = {entry["kind"] for entry in manifest["lineage"]["artifacts"]}
     assert "incident_bundle_manifest" in kinds
     assert "release_command_brief_json" in kinds
@@ -324,6 +343,50 @@ def test_cmd_link_incident_followup_eval_records_explicit_linkage(monkeypatch, t
     assert payload["events"][-1]["action"] == "link_followup_eval"
 
 
+def test_cmd_record_feedback_and_summary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    record_buffer = io.StringIO()
+    with redirect_stdout(record_buffer):
+        exit_code = cmd_record_feedback(
+            "release needs another safety review",
+            "qa-owner-1",
+            "qa-owner",
+            "negative",
+            "urgent_followup",
+            "release",
+            "release-a",
+            "",
+            "",
+            "",
+            str(tmp_path / "artifact.md"),
+            ["safety", "review"],
+            "reviewer saw unstable behavior",
+        )
+    record_payload = json.loads(record_buffer.getvalue())
+
+    list_buffer = io.StringIO()
+    with redirect_stdout(list_buffer):
+        list_exit = cmd_list_feedback("release", "release-a", "", "", "", "", 10)
+    list_payload = json.loads(list_buffer.getvalue())
+
+    summary_buffer = io.StringIO()
+    with redirect_stdout(summary_buffer):
+        summary_exit = cmd_feedback_summary("", "release-a", "", "", 10)
+    summary_payload = json.loads(summary_buffer.getvalue())
+
+    assert exit_code == 0
+    assert record_payload["sentiment"] == "negative"
+    assert record_payload["actionability"] == "urgent_followup"
+    assert record_payload["labels"] == ["safety", "review"]
+    assert list_exit == 0
+    assert list_payload[0]["feedback_id"] == record_payload["feedback_id"]
+    assert summary_exit == 0
+    assert summary_payload["metrics"]["total_feedback_count"] == 1
+    assert summary_payload["metrics"]["urgent_feedback_count"] == 1
+    assert summary_payload["top_labels"][0]["label"] == "review"
+
+
 def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
@@ -351,6 +414,21 @@ def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_
             "emergency waiver",
             "",
         )
+        cmd_record_feedback(
+            "production reviewer requested rollback evidence",
+            "release-manager-1",
+            "release-manager",
+            "negative",
+            "followup_required",
+            "release",
+            "release-a",
+            "",
+            "",
+            "",
+            "",
+            ["rollback"],
+            "",
+        )
 
     buffer = io.StringIO()
     with redirect_stdout(buffer):
@@ -364,9 +442,12 @@ def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_
     assert "## Summary Metrics" in markdown
     assert "## Incident Queue" in markdown
     assert "## Override Pressure" in markdown
+    assert "## Recent Feedback" in markdown
     assert "## Artifact Lineage" in markdown
     assert "unsafe production answer" in markdown
     assert payload["metrics"]["active_incident_count"] == 1
+    assert payload["metrics"]["feedback_count"] == 1
+    assert payload["metrics"]["negative_feedback_count"] == 1
     assert sidecar["lineage"]["counts"]["artifacts"] >= 2
 
 
@@ -388,6 +469,21 @@ def test_cmd_export_weekly_status_aggregates_handoff_history(monkeypatch, tmp_pa
             "freeze exception",
             "",
         )
+        cmd_record_feedback(
+            "manager flagged recurring freeze-risk",
+            "release-manager-1",
+            "release-manager",
+            "negative",
+            "followup_required",
+            "release",
+            "release-risky",
+            "",
+            "",
+            "",
+            "",
+            ["freeze-window"],
+            "",
+        )
         cmd_record_operator_handoff([], 10, 10, "day-1")
         cmd_record_operator_handoff([], 10, 10, "day-2")
 
@@ -404,6 +500,7 @@ def test_cmd_export_weekly_status_aggregates_handoff_history(monkeypatch, tmp_pa
     assert "# Weekly Release Status" in markdown
     assert "## Recurring High-Risk Releases" in markdown
     assert "## Recurring Override Blockers" in markdown
+    assert "## Current Feedback Signals" in markdown
     assert "## Artifact Lineage" in markdown
     assert "release-risky" in markdown
     assert "production:environment_frozen" in markdown
@@ -508,6 +605,21 @@ def test_cmd_export_release_command_brief_writes_markdown(monkeypatch, tmp_path:
             "",
             "contain before promotion",
         )
+        cmd_record_feedback(
+            "release review still lacks rollback confidence",
+            "qa-owner-1",
+            "qa-owner",
+            "negative",
+            "urgent_followup",
+            "release",
+            "release-brief",
+            "",
+            "",
+            "",
+            "",
+            ["rollback"],
+            "",
+        )
 
     buffer = io.StringIO()
     with redirect_stdout(buffer):
@@ -531,6 +643,7 @@ def test_cmd_export_release_command_brief_writes_markdown(monkeypatch, tmp_path:
     assert "hold_release" in markdown
     assert "## Artifact Lineage" in markdown
     assert payload["lineage"]["counts"]["artifacts"] >= 4
+    assert any("Human feedback" in finding for finding in payload["roles"][-1]["findings"])
 
 
 def test_cmd_release_and_incident_ledger_backup_round_trip(monkeypatch, tmp_path: Path) -> None:

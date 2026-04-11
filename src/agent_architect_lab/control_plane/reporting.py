@@ -18,6 +18,7 @@ from agent_architect_lab.artifact_lineage import (
 from agent_architect_lab.agent.orchestration import export_release_command_brief
 from agent_architect_lab.config import Settings
 from agent_architect_lab.harness.incidents import get_incident_review_board, list_incidents
+from agent_architect_lab.harness.feedback import build_feedback_summary, build_related_feedback
 from agent_architect_lab.harness.ledger import (
     get_environment_history,
     get_environment_status,
@@ -132,6 +133,7 @@ def build_governance_summary_payload(
     ]
     releases = [row.to_dict() for row in list_releases(ledger_path=settings.release_ledger_path)]
     runtime_realism = build_runtime_realism_payload(settings)
+    feedback_summary = build_feedback_summary(ledger_path=settings.feedback_ledger_path, limit=incident_limit)
     payload = {
         "generated_at": utc_now_iso(),
         "environments": selected_environments,
@@ -143,6 +145,7 @@ def build_governance_summary_payload(
         "active_overrides": active_overrides,
         "releases": releases,
         "runtime_realism": runtime_realism,
+        "feedback_summary": feedback_summary,
         "metrics": {
             "recorded_release_count": len(releases),
             "high_risk_release_count": len(
@@ -167,6 +170,9 @@ def build_governance_summary_payload(
             ),
             "planner_shadow_report_count": runtime_realism["metrics"]["planner_shadow_report_count"],
             "release_command_brief_count": runtime_realism["metrics"]["release_command_brief_count"],
+            "feedback_count": feedback_summary["metrics"]["total_feedback_count"],
+            "negative_feedback_count": feedback_summary["metrics"]["negative_feedback_count"],
+            "urgent_feedback_count": feedback_summary["metrics"]["urgent_feedback_count"],
         },
     }
     payload["lineage"] = build_governance_summary_lineage(settings, runtime_realism=runtime_realism)
@@ -212,6 +218,7 @@ def build_operator_handoff_payload(
     payload = handoff.to_dict()
     payload["incident_review_board"] = incident_review_board.to_dict()
     payload["active_incidents"] = active_incidents
+    payload["feedback_summary"] = build_feedback_summary(ledger_path=settings.feedback_ledger_path, limit=override_limit)
     if incident_review_board.rows:
         active_names = [row.incident_id for row in incident_review_board.rows if row.status not in {"resolved", "closed"}]
         if active_names:
@@ -387,6 +394,12 @@ def build_release_runbook_payload(
         )
         if row.release_name == release_name and row.status not in {"resolved", "closed"}
     ]
+    related_feedback = build_related_feedback(
+        ledger_path=settings.feedback_ledger_path,
+        release_name=release_name,
+        incident_ids=[row.get("incident_id") for row in active_incidents if row.get("incident_id")],
+        limit=incident_limit,
+    )
     environment_statuses = {
         environment: get_environment_status(environment, ledger_path=settings.release_ledger_path).to_dict()
         for environment in selected_environments
@@ -419,6 +432,7 @@ def build_release_runbook_payload(
         "readiness_digest": readiness_digest,
         "rollout_matrix": rollout_matrix,
         "active_incidents": active_incidents,
+        "related_feedback": related_feedback,
         "active_overrides": active_overrides,
         "environment_statuses": environment_statuses,
         "environment_histories": environment_histories,
@@ -725,6 +739,7 @@ def render_operator_handoff_markdown(payload: dict[str, Any], *, title: str) -> 
     active_overrides = payload.get("active_overrides", [])
     incident_rows = payload.get("incident_review_board", {}).get("rows", [])
     active_incidents = payload.get("active_incidents", [])
+    feedback_summary = payload.get("feedback_summary", {})
     lines = [
         f"# {title}",
         "",
@@ -838,6 +853,18 @@ def render_operator_handoff_markdown(payload: dict[str, Any], *, title: str) -> 
             ],
         )
     )
+    if feedback_summary:
+        lines.extend(["", "## Feedback Signals", ""])
+        lines.extend(
+            render_markdown_table(
+                ["Metric", "Value"],
+                [
+                    ["Total feedback", (feedback_summary.get("metrics") or {}).get("total_feedback_count")],
+                    ["Negative feedback", (feedback_summary.get("metrics") or {}).get("negative_feedback_count")],
+                    ["Urgent follow-up", (feedback_summary.get("metrics") or {}).get("urgent_feedback_count")],
+                ],
+            )
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -852,6 +879,7 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
     releases = payload.get("releases", [])
     metrics = payload.get("metrics", {})
     runtime_realism = payload.get("runtime_realism", {})
+    feedback_summary = payload.get("feedback_summary", {})
     latest_planner_shadow = runtime_realism.get("latest_planner_shadow") or {}
     latest_release_command_brief = runtime_realism.get("latest_release_command_brief") or {}
     lines = [
@@ -878,6 +906,9 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
                 ["Expired or expiring overrides", metrics.get("urgent_override_count")],
                 ["Planner shadow reports", metrics.get("planner_shadow_report_count")],
                 ["Release command briefs", metrics.get("release_command_brief_count")],
+                ["Feedback records", metrics.get("feedback_count")],
+                ["Negative feedback", metrics.get("negative_feedback_count")],
+                ["Urgent feedback", metrics.get("urgent_feedback_count")],
             ],
         )
     )
@@ -1024,6 +1055,36 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
             ],
         )
     )
+    lines.extend(["", "## Feedback Signals", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Total feedback", (feedback_summary.get("metrics") or {}).get("total_feedback_count")],
+                ["Negative feedback", (feedback_summary.get("metrics") or {}).get("negative_feedback_count")],
+                ["Urgent follow-up", (feedback_summary.get("metrics") or {}).get("urgent_feedback_count")],
+                ["Top label", (feedback_summary.get("top_labels") or [{}])[0].get("label") if feedback_summary.get("top_labels") else None],
+            ],
+        )
+    )
+    lines.extend(["", "## Recent Feedback", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Created At", "Actor", "Role", "Sentiment", "Actionability", "Target", "Summary"],
+            [
+                [
+                    row.get("created_at"),
+                    row.get("actor"),
+                    row.get("role"),
+                    row.get("sentiment"),
+                    row.get("actionability"),
+                    row.get("target_kind"),
+                    row.get("summary"),
+                ]
+                for row in feedback_summary.get("recent_feedback", [])[:10]
+            ],
+        )
+    )
     lineage_rows = artifact_lineage_rows(payload.get("lineage") or {}, limit=12)
     if lineage_rows:
         lines.extend(["", "## Artifact Lineage", ""])
@@ -1038,6 +1099,7 @@ def render_release_runbook_markdown(payload: dict[str, Any], *, title: str) -> s
     rollout_rows = payload.get("rollout_matrix", {}).get("rows", [])
     active_incidents = payload.get("active_incidents", [])
     active_overrides = payload.get("active_overrides", [])
+    related_feedback = payload.get("related_feedback", [])
     execution_plan = payload.get("execution_plan", [])
     verification_commands = payload.get("verification_commands", [])
     environment_statuses = payload.get("environment_statuses", {})
@@ -1130,6 +1192,23 @@ def render_release_runbook_markdown(payload: dict[str, Any], *, title: str) -> s
             ],
         )
     )
+    lines.extend(["", "## Related Feedback", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Created At", "Actor", "Sentiment", "Actionability", "Target", "Summary"],
+            [
+                [
+                    row.get("created_at"),
+                    row.get("actor"),
+                    row.get("sentiment"),
+                    row.get("actionability"),
+                    row.get("target_kind"),
+                    row.get("summary"),
+                ]
+                for row in related_feedback
+            ],
+        )
+    )
     lines.extend(["", "## Execution Plan", ""])
     lines.extend(
         render_markdown_table(
@@ -1201,6 +1280,7 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
     current_governance = payload.get("current_governance", {})
     metrics = current_governance.get("metrics", {})
     runtime_realism = current_governance.get("runtime_realism", {})
+    feedback_summary = current_governance.get("feedback_summary", {})
     latest_planner_shadow = runtime_realism.get("latest_planner_shadow") or {}
     latest_release_command_brief = runtime_realism.get("latest_release_command_brief") or {}
     patterns = payload.get("historical_patterns", {})
@@ -1231,6 +1311,9 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
                 ["Urgent overrides", metrics.get("urgent_override_count")],
                 ["Planner shadow reports", metrics.get("planner_shadow_report_count")],
                 ["Release command briefs", metrics.get("release_command_brief_count")],
+                ["Feedback records", metrics.get("feedback_count")],
+                ["Negative feedback", metrics.get("negative_feedback_count")],
+                ["Urgent feedback", metrics.get("urgent_feedback_count")],
             ],
         )
     )
@@ -1314,6 +1397,17 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
                     row.get("summary"),
                 ]
                 for row in recent_handoffs
+            ],
+        )
+    )
+    lines.extend(["", "## Current Feedback Signals", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Total feedback", (feedback_summary.get("metrics") or {}).get("total_feedback_count")],
+                ["Negative feedback", (feedback_summary.get("metrics") or {}).get("negative_feedback_count")],
+                ["Urgent follow-up", (feedback_summary.get("metrics") or {}).get("urgent_feedback_count")],
             ],
         )
     )

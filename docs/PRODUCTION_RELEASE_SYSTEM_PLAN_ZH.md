@@ -27,8 +27,8 @@
 3. runtime realism 已经不再只是脚手架，但仍不是完整的 hosted release path。
    planner shadow 能验证 planner 第一步行为，bounded role handoff 也已经能把 release command ownership 结构化表达出来，但默认执行仍然以 heuristic runtime 为主，多角色模式也还停留在 artifact-level，而不是 worker-execution-level。
 
-4. 剩余最大的缺口集中在 retrieval 深度、human feedback ingestion 和平台部署形态。
-   当前仍然主要是本地 note 的 lexical retrieval，还没有把 human feedback 当成一等训练信号，也还没有建成分布式 control plane 或更真实的多租户服务形态。
+4. 剩余最大的缺口现在集中在 retrieval 深度、更深入的 feedback learning 和平台部署形态。
+   当前已经把 human feedback 作为一等治理信号记录下来了，但 retrieval 仍然主要是本地 note 的 lexical search，feedback 也还没有真正反哺到自动化 eval generation / ranking，而且系统仍未建成分布式 control plane 或更真实的多租户服务形态。
 
 ## 已完成里程碑
 
@@ -71,14 +71,14 @@
 目标：补齐一线 AI 架构师最常被要求承担的 retrieval 与学习闭环能力。
 
 - 把 retrieval 从 note 搜索继续推进到 provenance-aware knowledge routing
-- 把 human feedback ingestion 接进 incident、eval、release review 闭环
+- 把新的 human feedback ledger 继续接进 eval generation、ranking 和 regression prioritization
 - 把 prompts、tools、notes、traces、checkpoints、review decisions 继续串成更强的 lineage/analytics 视图
 
 ## 推荐推进顺序
 
 1. 先把 control plane 的部署形态继续做实
 2. 再深化 hosted planner 和多角色 runtime realism
-3. 再补 retrieval provenance 与 human feedback ingestion
+3. 再补 retrieval provenance 与更深入的 feedback learning
 4. 最后再继续扩大服务边界
 
 ## 这个仓库何时算“对当前 scope 足够生产级”

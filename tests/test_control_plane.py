@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_export_release_command_brief,
     cmd_ledger_storage_status,
     cmd_approve_release,
+    cmd_record_feedback,
     cmd_open_incident,
     cmd_record_operator_handoff,
     cmd_restore_release_and_incident_ledger_backup,
@@ -73,6 +74,21 @@ def _seed_release_state() -> None:
             "release-a",
             "/tmp/report.json",
             "customer escalation",
+        )
+        cmd_record_feedback(
+            "release-manager requested rollback evidence",
+            "release-manager-1",
+            "release-manager",
+            "negative",
+            "followup_required",
+            "release",
+            "release-a",
+            "",
+            "",
+            "",
+            "",
+            ["rollback"],
+            "",
         )
 
 
@@ -441,6 +457,63 @@ def test_control_plane_app_links_incident_followup_eval(monkeypatch, tmp_path: P
     assert linked.payload["events"][-1]["action"] == "link_followup_eval"
 
 
+def test_control_plane_app_records_feedback_and_reads_summary(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    app = _build_app(settings)
+
+    created = app.handle_request(
+        "POST",
+        "/feedback",
+        _request_headers(
+            "writer-token",
+            actor="release-manager-1",
+            role="release-manager",
+            idempotency_key="feedback-1",
+        ),
+        json.dumps(
+            {
+                "actor": "release-manager-1",
+                "role": "release-manager",
+                "sentiment": "negative",
+                "actionability": "followup_required",
+                "target_kind": "release",
+                "summary": "needs stronger rollback proof",
+                "release_name": "release-a",
+                "labels": ["rollback", "review"],
+            }
+        ).encode("utf-8"),
+    )
+    listed = app.handle_request(
+        "GET",
+        "/feedback?release_name=release-a&limit=10",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
+    summary = app.handle_request(
+        "GET",
+        "/feedback-summary?release_name=release-a&limit=10",
+        _request_headers(
+            "reader-token",
+            actor="release-manager-1",
+            role="release-manager",
+        ),
+        b"",
+    )
+
+    assert created.status_code == 201
+    assert created.payload["feedback_id"].startswith("feedback-")
+    assert listed.status_code == 200
+    assert listed.payload["rows"][0]["summary"] == "needs stronger rollback proof"
+    assert summary.status_code == 200
+    assert summary.payload["metrics"]["total_feedback_count"] == 1
+    assert summary.payload["metrics"]["negative_feedback_count"] == 1
+
+
 def test_control_plane_app_rejects_conflicting_idempotency_reuse(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     settings = load_settings()
@@ -768,6 +841,7 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert "Async Governance Summary" in markdown
         assert "## Runtime Realism" in markdown
+        assert "## Recent Feedback" in markdown
         assert "## Artifact Lineage" in markdown
         assert "planner-shadow-preseed.json" in markdown
         assert "release-a" in markdown

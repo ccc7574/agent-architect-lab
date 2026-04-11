@@ -13,6 +13,7 @@ The repository is intentionally small, but now includes:
 - Configurable planner providers with a deterministic default and model-backed scaffold
 - Planner shadow validation artifacts for model-backed rollout discipline
 - Incident-to-eval suggestion flow for turning failures into new harness tasks
+- Human feedback ingestion across releases, incidents, reports, and run artifacts
 - A report registry and manifest-aware baseline selection for release-grade eval comparisons
 - Immutable release manifests plus a release ledger with approval and promotion state transitions
 - A bounded role-handoff release command brief for QA, ops, incident command, and release management
@@ -51,6 +52,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli transition-incident incident-2
 PYTHONPATH=src python3 -m agent_architect_lab.cli list-incidents --status open
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report incident-202604... --title "Incident Rollback Report"
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle incident-202604...
+PYTHONPATH=src python3 -m agent_architect_lab.cli record-feedback --summary "release still needs rollback proof" --actor release-manager-1 --role release-manager --sentiment negative --actionability followup_required --target-kind release --release-name 2026-04-10-main --label rollback
+PYTHONPATH=src python3 -m agent_architect_lab.cli feedback-summary --release-name 2026-04-10-main
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval approval_simulation --report-prefix release-candidate --suite-aware-defaults --output-backfill-dir ./release-backfills
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --baseline-manifest ./baseline-manifest.json --report-prefix release-candidate --suite-aware-defaults
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-release-shadow --suites safety retrieval --report-prefix release-candidate --suite-aware-defaults --release-name 2026-04-10-main
@@ -148,6 +151,8 @@ More detail:
 - [docs/REPORT_REGISTRY.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/REPORT_REGISTRY.md)
 - [docs/RELEASE_LEDGER.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RELEASE_LEDGER.md)
 - [docs/RELEASE_LEDGER_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RELEASE_LEDGER_ZH.md)
+- [docs/HUMAN_FEEDBACK.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/HUMAN_FEEDBACK.md)
+- [docs/HUMAN_FEEDBACK_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/HUMAN_FEEDBACK_ZH.md)
 - [docs/CONTROL_PLANE.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/CONTROL_PLANE.md)
 - [docs/CONTROL_PLANE_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/CONTROL_PLANE_ZH.md)
 - [docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md)
@@ -173,6 +178,7 @@ Recorded releases are stored separately under `artifacts/releases`:
 
 That split makes it possible to audit what was reviewed versus what was later approved or promoted.
 Operator incidents are stored under `artifacts/incidents/incident-ledger.json` so triage, containment, follow-up evals, and closure remain auditable across shifts.
+Explicit human review feedback is stored under `artifacts/feedback/feedback-ledger.json` so release, incident, and artifact review signals can be summarized alongside system state.
 
 Production deploy readiness also respects `AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES`, which defaults to `30`.
 Required production sign-off roles come from `AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES`, which defaults to `qa-owner,release-manager`.
@@ -191,6 +197,7 @@ Use `approval-review-board` plus `AGENT_ARCHITECT_LAB_APPROVAL_STALE_MINUTES` to
 Use `open-incident`, `transition-incident`, `list-incidents`, and `incident-review-board` to run a basic incident command workflow with ownership, status, and follow-up eval linkage.
 Use `export-incident-report` to render one incident into a readable Markdown artifact for postmortems or stakeholder updates.
 Use `export-incident-bundle` to package the incident, linked release state, and related handoff artifacts into one export directory.
+Use `record-feedback`, `list-feedback`, and `feedback-summary` to capture explicit human review signals and feed them back into governance views.
 Use `export-governance-summary` to generate a manager-facing Markdown summary across release risk, approval backlog, incident load, and override pressure.
 Use `run-planner-shadow` to validate bounded planner behavior against task policy before trusting a model-backed planner in promotion workflows.
 Use `export-release-command-brief` to generate a deterministic role-handoff artifact spanning QA, ops, incident command, and release management.

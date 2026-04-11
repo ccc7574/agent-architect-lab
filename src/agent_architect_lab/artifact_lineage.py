@@ -105,6 +105,7 @@ def build_operator_handoff_lineage(settings: Settings) -> dict[str, Any]:
         [
             artifact_entry("release_ledger", settings.release_ledger_path),
             artifact_entry("incident_ledger", settings.incident_ledger_path),
+            artifact_entry("feedback_ledger", settings.feedback_ledger_path),
         ],
         label="operator_handoff",
     )
@@ -118,6 +119,7 @@ def build_governance_summary_lineage(
     entries: list[dict[str, Any] | None] = [
         artifact_entry("release_ledger", settings.release_ledger_path),
         artifact_entry("incident_ledger", settings.incident_ledger_path),
+        artifact_entry("feedback_ledger", settings.feedback_ledger_path),
     ]
     runtime_payload = runtime_realism or {}
     latest_planner_shadow = runtime_payload.get("latest_planner_shadow") or {}
@@ -170,6 +172,7 @@ def build_release_lineage(
 ) -> dict[str, Any]:
     entries: list[dict[str, Any] | None] = [
         artifact_entry("release_ledger", settings.release_ledger_path, release_name=release_name),
+        artifact_entry("feedback_ledger", settings.feedback_ledger_path, release_name=release_name),
     ]
     try:
         record = get_release_record(release_name, ledger_path=settings.release_ledger_path)
@@ -280,6 +283,7 @@ def build_incident_bundle_lineage(
     release_name = incident_record.get("release_name")
     entries: list[dict[str, Any] | None] = [
         artifact_entry("incident_ledger", settings.incident_ledger_path, incident_id=incident_id),
+        artifact_entry("feedback_ledger", settings.feedback_ledger_path, incident_id=incident_id),
         artifact_entry("incident_bundle_manifest", bundle_manifest_path, incident_id=incident_id),
         artifact_entry("incident_report", incident_report_path, incident_id=incident_id),
         artifact_entry(

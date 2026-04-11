@@ -1,6 +1,6 @@
 # Control Plane
 
-`agent-architect-lab` now exposes a lightweight internal HTTP control plane on top of the existing release and incident ledgers.
+`agent-architect-lab` now exposes a lightweight internal HTTP control plane on top of the existing release, incident, and feedback ledgers.
 
 The control plane now has four internal layers:
 
@@ -68,6 +68,7 @@ Default role policy keys:
 - `manage_release_override`
 - `open_incident`
 - `transition_incident`
+- `write_feedback`
 
 Override them with `AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES`, for example:
 
@@ -88,6 +89,8 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `GET /ledger-storage-status`
 - `GET /releases?limit=50`
 - `GET /releases/{release_name}`
+- `GET /feedback?release_name=...&incident_id=...&target_kind=...&limit=20`
+- `GET /feedback-summary?release_name=...&incident_id=...&target_kind=...&limit=20`
 - `GET /release-risk-board?environment=staging&environment=production&limit=20`
 - `GET /approval-review-board?environment=staging&environment=production&limit=20`
 - `GET /incident-review-board?status=open&limit=20`
@@ -110,6 +113,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /incidents/open`
 - `POST /incidents/{incident_id}/transition`
 - `POST /incidents/{incident_id}/followup-eval`
+- `POST /feedback`
 - `POST /jobs/export-governance-summary`
 - `POST /jobs/export-weekly-status`
 - `POST /jobs/record-operator-handoff`

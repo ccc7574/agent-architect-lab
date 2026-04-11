@@ -27,8 +27,8 @@ This document reviews the current `agent-architect-lab` repository as if it were
 3. Runtime realism has moved beyond scaffolding, but it is still not a full hosted release path.
    Planner shadow validates first-step planner behavior and bounded role handoff artifacts model release command ownership, but default execution is still heuristic-first and the multi-role pattern is still artifact-level rather than worker-execution-level.
 
-4. The biggest remaining gaps are in retrieval depth, human feedback ingestion, and platform deployment shape.
-   The repo still uses lightweight lexical retrieval over local notes, does not yet treat human feedback as a first-class training signal, and does not model a distributed control plane or true service tenancy.
+4. The biggest remaining gaps are now in retrieval depth, deeper feedback learning, and platform deployment shape.
+   The repo now records human feedback as a first-class governance signal, but retrieval is still lightweight lexical search over local notes, feedback is not yet fed into automated eval generation or ranking, and the system still does not model a distributed control plane or true service tenancy.
 
 ## Completed Milestones
 
@@ -71,14 +71,14 @@ Goal: turn the hosted planner and multi-role runtime into something closer to a 
 Goal: make the repo better reflect the retrieval and human-learning expectations placed on senior AI architects.
 
 - Extend retrieval from lexical note search into stronger provenance-aware knowledge routing
-- Add explicit human feedback ingestion into incident, eval, and release review loops
+- Feed the new human feedback ledger into eval generation, ranking, and regression prioritization
 - Link prompts, tools, notes, traces, checkpoints, and review decisions into richer lineage and analytics views
 
 ## Recommended Execution Order
 
 1. Harden the deployment shape of the control plane.
 2. Deepen hosted-planner and multi-role runtime realism.
-3. Improve retrieval provenance and human feedback ingestion.
+3. Improve retrieval provenance and deeper feedback learning.
 4. Only after those are stable, widen the service boundary further.
 
 ## Definition Of “Production-Ready Enough” For This Repo

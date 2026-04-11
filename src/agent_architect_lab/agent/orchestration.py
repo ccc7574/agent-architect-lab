@@ -12,6 +12,7 @@ from agent_architect_lab.artifact_lineage import (
     extend_lineage,
 )
 from agent_architect_lab.config import Settings, load_settings
+from agent_architect_lab.harness.feedback import build_related_feedback
 from agent_architect_lab.harness.incidents import list_incidents
 from agent_architect_lab.harness.ledger import (
     get_approval_review_board,
@@ -146,6 +147,12 @@ def build_release_command_brief(
         for incident in list_incidents(ledger_path=resolved_settings.incident_ledger_path, limit=max(incident_limit * 4, 50))
         if incident.release_name == release_name or (incident.environment in selected_environments and incident.status != "closed")
     ][:incident_limit]
+    related_feedback = build_related_feedback(
+        ledger_path=resolved_settings.feedback_ledger_path,
+        release_name=release_name,
+        incident_ids=[incident.incident_id for incident in incidents],
+        limit=max(incident_limit, 10),
+    )
     history = {
         environment: get_environment_history(
             environment,
@@ -213,6 +220,17 @@ def build_release_command_brief(
         incident_recommendations.append(
             "close_incident_loop" if incident.followup_eval_path else "link_followup_eval"
         )
+    feedback_findings = [
+        f"{row.get('feedback_id')}: {row.get('sentiment')}/{row.get('actionability')} from {row.get('actor')}."
+        for row in related_feedback[:5]
+    ]
+    if related_feedback:
+        incident_findings.append(f"Related human feedback: {len(related_feedback)} record(s).")
+        incident_findings.extend(feedback_findings)
+    if any(row.get("actionability") == "urgent_followup" for row in related_feedback):
+        incident_blockers.append("Urgent human feedback requires follow-up before promotion.")
+    if any(row.get("sentiment") == "negative" for row in related_feedback):
+        incident_recommendations.append("review_negative_feedback")
 
     release_manager_blockers = _dedupe(qa_blockers + ops_blockers + incident_blockers)
     if incident_blockers:
@@ -230,6 +248,8 @@ def build_release_command_brief(
         f"Readiness summary: {digest.summary}",
         f"Final recommended action: `{recommended_action}`.",
     ]
+    if related_feedback:
+        manager_findings.append(f"Human feedback load: {len(related_feedback)} related feedback record(s).")
     manager_recommendations = _dedupe(
         qa_recommendations + ops_recommendations + incident_recommendations + [recommended_action]
     )

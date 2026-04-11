@@ -28,6 +28,7 @@ from agent_architect_lab.control_plane.storage import (
     IdempotencyRecord,
     IdempotencyRepository,
 )
+from agent_architect_lab.harness.feedback import build_feedback_summary, list_feedback, record_feedback
 from agent_architect_lab.harness.incidents import (
     get_incident_review_board,
     link_incident_followup_eval,
@@ -232,6 +233,39 @@ class ControlPlaneApp:
                     return respond(auth_error)
                 limit = _query_int(query, "limit", default=50, minimum=1)
                 payload = {"rows": [row.to_dict() for row in list_releases(ledger_path=self.settings.release_ledger_path)[:limit]]}
+                return respond(ControlPlaneResponse(200, payload))
+            if method == "GET" and path == "/feedback":
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = {
+                    "rows": [
+                        row.to_dict()
+                        for row in list_feedback(
+                            ledger_path=self.settings.feedback_ledger_path,
+                            target_kind=_query_optional_string(query, "target_kind"),
+                            release_name=_query_optional_string(query, "release_name"),
+                            incident_id=_query_optional_string(query, "incident_id"),
+                            run_id=_query_optional_string(query, "run_id"),
+                            sentiment=_query_optional_string(query, "sentiment", allowed={"positive", "neutral", "negative"}),
+                            actionability=_query_optional_string(query, "actionability", allowed={"observe", "followup_required", "urgent_followup"}),
+                            limit=_query_int(query, "limit", default=20, minimum=1),
+                        )
+                    ]
+                }
+                return respond(ControlPlaneResponse(200, payload))
+            if method == "GET" and path == "/feedback-summary":
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                payload = build_feedback_summary(
+                    ledger_path=self.settings.feedback_ledger_path,
+                    target_kind=_query_optional_string(query, "target_kind"),
+                    release_name=_query_optional_string(query, "release_name"),
+                    incident_id=_query_optional_string(query, "incident_id"),
+                    run_id=_query_optional_string(query, "run_id"),
+                    limit=_query_int(query, "limit", default=20, minimum=1),
+                )
                 return respond(ControlPlaneResponse(200, payload))
             release_match = re.fullmatch(r"/releases/([^/]+)", path)
             if method == "GET" and release_match is not None:
@@ -899,6 +933,35 @@ class ControlPlaneApp:
                     ).to_dict(),
                     success_status_code=200,
                 ))
+            if method == "POST" and path == "/feedback":
+                authorization, auth_error = authorize("write", "write_feedback")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(self._execute_mutation(
+                    request_id=request_id,
+                    authorization=authorization,
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=body,
+                    handler=lambda payload: record_feedback(
+                        actor=_required_string(payload, "actor"),
+                        role=_required_string(payload, "role"),
+                        sentiment=_required_string(payload, "sentiment"),
+                        actionability=_optional_string(payload, "actionability") or "observe",
+                        target_kind=_required_string(payload, "target_kind"),
+                        summary=_required_string(payload, "summary"),
+                        ledger_path=self.settings.feedback_ledger_path,
+                        release_name=_optional_string(payload, "release_name"),
+                        incident_id=_optional_string(payload, "incident_id"),
+                        report_path=_optional_string(payload, "report_path"),
+                        run_id=_optional_string(payload, "run_id"),
+                        artifact_path=_optional_string(payload, "artifact_path"),
+                        labels=_optional_string_list(payload, "labels"),
+                        notes=_optional_string(payload, "notes") or "",
+                    ).to_dict(),
+                    success_status_code=201,
+                ))
             return respond(_error_response(404, "not_found", f"Route '{path}' is not defined."))
         except json.JSONDecodeError:
             return respond(_error_response(400, "invalid_json", "Request body must be valid JSON."))
@@ -1531,6 +1594,8 @@ def _route_policy_key_for_path(method: str, path: str) -> str:
             return "open_incident"
         if re.fullmatch(r"/incidents/[^/]+/transition", path):
             return "transition_incident"
+        if path == "/feedback":
+            return "write_feedback"
         if re.fullmatch(r"/releases/[^/]+/approve", path):
             return "approve_release"
         if re.fullmatch(r"/releases/[^/]+/reject", path):
