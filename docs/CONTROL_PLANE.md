@@ -56,6 +56,12 @@ To inspect failed jobs that currently sit in the dead-letter operational view:
 PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-dead-letter-jobs
 ```
 
+To inspect a compact metrics snapshot for dashboards or local debugging:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-metrics
+```
+
 The server is stdlib-only and keeps artifact storage exactly where the CLI keeps it.
 
 To switch the control plane to SQLite-backed persistence:
@@ -68,6 +74,23 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_SQLITE_PATH=/tmp/agent-architect-lab-co
 SQLite schema migrations run automatically on startup. The `/health` response exposes the active storage backend and SQLite schema version.
 
 If you need stricter or looser worker liveness detection, set `AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S`.
+
+If you need stricter job admission guardrails, set:
+
+- `AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_QUEUED_PER_TYPE`
+- `AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_INFLIGHT_PER_TYPE`
+- `AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_ADMISSION_OVERRIDES`
+
+Example:
+
+```bash
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_QUEUED_PER_TYPE=10
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_INFLIGHT_PER_TYPE=10
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_ADMISSION_OVERRIDES='{
+  "backup_control_plane_storage": {"max_inflight": 1},
+  "restore_control_plane_backup": {"max_inflight": 1}
+}'
+```
 
 ## Authentication
 
@@ -87,6 +110,7 @@ If you need stricter or looser worker liveness detection, set `AGENT_ARCHITECT_L
 - Running jobs now also carry `worker_id`, `heartbeat_at`, and `lease_expires_at` so stale leases can be recovered
 - Worker registry views now classify workers as `healthy`, `stale`, or `stopped` based on heartbeat age
 - Failed jobs are now exposed through a dedicated dead-letter operational view while preserving the existing manual retry flow
+- Job admission now rejects new jobs when per-type queued or inflight limits are exceeded, and those rejections are audited as `admission_denied`
 - Every API response now includes `_meta.request_id` for correlation
 - Policy rejections now include structured `error.details` metadata for dashboards and audits
 - `/health` now reports whether the worker is server-managed or expected to run externally
@@ -126,6 +150,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 ### Read Routes
 
 - `GET /health`
+- `GET /metrics`
 - `GET /storage-status`
 - `GET /ledger-storage-status`
 - `GET /releases?limit=50`
@@ -203,6 +228,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/workers?health=stale
+```
+
+Inspect the compact metrics snapshot:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/metrics
 ```
 
 Inspect failed jobs in the dead-letter operational view:

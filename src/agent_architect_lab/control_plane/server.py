@@ -15,6 +15,7 @@ from agent_architect_lab.control_plane.jobs import (
     ControlPlaneJobWorker,
     build_dead_letter_summary,
 )
+from agent_architect_lab.control_plane.metrics import build_control_plane_metrics_snapshot
 from agent_architect_lab.control_plane.maintenance import build_control_plane_storage_status
 from agent_architect_lab.control_plane.policies import (
     AuthorizationContext,
@@ -58,7 +59,7 @@ from agent_architect_lab.models import utc_now_iso
 @dataclass(slots=True)
 class ControlPlaneResponse:
     status_code: int
-    payload: dict[str, Any]
+    payload: Any
     headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -171,6 +172,23 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(ControlPlaneResponse(200, build_control_plane_storage_status(self.settings)))
+            if method == "GET" and path == "/metrics":
+                _authorization, auth_error = authorize("read", "read_jobs")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    ControlPlaneResponse(
+                        200,
+                        build_control_plane_metrics_snapshot(
+                            settings=self.settings,
+                            job_store=self.job_store,
+                            worker_store=self.worker_store,
+                            worker_alive=self.job_worker.is_alive(),
+                            worker_id=self.job_worker.worker_id,
+                            managed_by_server=self.job_worker.managed_by_server,
+                        ),
+                    )
+                )
             if method == "GET" and path == "/job-queue-status":
                 _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
@@ -1212,7 +1230,32 @@ class ControlPlaneApp:
                 request_fingerprint=request_fingerprint,
             )
             return response
-        result_payload = handler(payload)
+        try:
+            result_payload = handler(payload)
+        except ControlPlaneAdmissionError as exc:
+            response = _error_response(
+                429,
+                "job_admission_rejected",
+                str(exc),
+                details=exc.details,
+            )
+            self._append_denied_request_audit(
+                event_type="admission_denied",
+                request_id=request_id,
+                method=method,
+                path=path,
+                route_policy_key=_route_policy_key_for_path(method, path),
+                headers=headers,
+                response=response,
+                decision_details=exc.details,
+                actor=authorization.actor if authorization is not None else None,
+                role=authorization.role if authorization is not None else None,
+                token_scope=authorization.token_scope if authorization is not None else None,
+                body=body,
+                idempotency_key=idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+            return response
         operation_id = f"op-{uuid4().hex[:12]}"
         committed_at = utc_now_iso()
         response = self._build_mutation_response(
@@ -1266,6 +1309,35 @@ class ControlPlaneApp:
         authorization: AuthorizationContext | None,
         request_id: str,
     ) -> dict[str, Any]:
+        limits = self._resolve_job_admission_limits(job_type)
+        existing = self.job_store.list_jobs(job_type=job_type, limit=1000)
+        queued_jobs = sum(1 for job in existing if job.status == "queued")
+        running_jobs = sum(1 for job in existing if job.status == "running")
+        inflight_jobs = queued_jobs + running_jobs
+        if queued_jobs >= limits["max_queued"]:
+            raise ControlPlaneAdmissionError(
+                f"Job type '{job_type}' has reached the queued admission limit.",
+                details={
+                    "job_type": job_type,
+                    "limit_kind": "max_queued",
+                    "queued_jobs": queued_jobs,
+                    "running_jobs": running_jobs,
+                    "inflight_jobs": inflight_jobs,
+                    "limit": limits["max_queued"],
+                },
+            )
+        if inflight_jobs >= limits["max_inflight"]:
+            raise ControlPlaneAdmissionError(
+                f"Job type '{job_type}' has reached the inflight admission limit.",
+                details={
+                    "job_type": job_type,
+                    "limit_kind": "max_inflight",
+                    "queued_jobs": queued_jobs,
+                    "running_jobs": running_jobs,
+                    "inflight_jobs": inflight_jobs,
+                    "limit": limits["max_inflight"],
+                },
+            )
         job = self.job_store.create_job(
             job_type=job_type,
             payload=payload,
@@ -1276,7 +1348,22 @@ class ControlPlaneApp:
         )
         return job.to_dict()
 
+    def _resolve_job_admission_limits(self, job_type: str) -> dict[str, int]:
+        limits = {
+            "max_queued": self.settings.control_plane_job_max_queued_per_type,
+            "max_inflight": self.settings.control_plane_job_max_inflight_per_type,
+        }
+        limits.update(self.settings.control_plane_job_admission_overrides.get(job_type, {}))
+        return {
+            "max_queued": max(1, int(limits["max_queued"])),
+            "max_inflight": max(1, int(limits["max_inflight"])),
+        }
+
     def _attach_response_envelope(self, response: ControlPlaneResponse, *, request_id: str) -> ControlPlaneResponse:
+        if not isinstance(response.payload, dict):
+            headers = dict(response.headers)
+            headers["X-Request-Id"] = request_id
+            return ControlPlaneResponse(status_code=response.status_code, payload=response.payload, headers=headers)
         payload = dict(response.payload)
         payload["_meta"] = {
             "request_id": request_id,
@@ -1413,6 +1500,12 @@ class ControlPlaneHTTPServer(ThreadingHTTPServer):
         super().server_close()
 
 
+class ControlPlaneAdmissionError(ValueError):
+    def __init__(self, message: str, *, details: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.details = dict(details)
+
+
 def create_control_plane_server(
     *,
     settings: Settings | None = None,
@@ -1485,11 +1578,18 @@ def _build_handler(app: ControlPlaneApp) -> type[BaseHTTPRequestHandler]:
                 {key: value for key, value in self.headers.items()},
                 body,
             )
-            payload = json.dumps(response.payload, indent=2).encode("utf-8") + b"\n"
+            if isinstance(response.payload, (dict, list)):
+                payload = json.dumps(response.payload, indent=2).encode("utf-8") + b"\n"
+                content_type = "application/json; charset=utf-8"
+            else:
+                payload = str(response.payload).encode("utf-8")
+                content_type = response.headers.get("Content-Type", "text/plain; charset=utf-8")
             self.send_response(response.status_code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             for key, value in response.headers.items():
+                if key.lower() == "content-type":
+                    continue
                 self.send_header(key, value)
             self.end_headers()
             self.wfile.write(payload)

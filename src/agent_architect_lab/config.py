@@ -41,6 +41,9 @@ class Settings:
     control_plane_job_poll_interval_s: float
     control_plane_job_lease_ttl_s: float
     control_plane_job_heartbeat_interval_s: float
+    control_plane_job_max_queued_per_type: int
+    control_plane_job_max_inflight_per_type: int
+    control_plane_job_admission_overrides: dict[str, dict[str, int]]
     control_plane_worker_stale_after_s: float
     planner_provider: str
     planner_model: str
@@ -219,6 +222,24 @@ def load_settings() -> Settings:
     control_plane_job_heartbeat_interval_s = float(
         os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_HEARTBEAT_INTERVAL_S", "1.0")
     )
+    control_plane_job_max_queued_per_type = int(
+        os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_QUEUED_PER_TYPE", "25")
+    )
+    control_plane_job_max_inflight_per_type = int(
+        os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_INFLIGHT_PER_TYPE", "25")
+    )
+    raw_job_admission_overrides = json.loads(
+        os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_ADMISSION_OVERRIDES", "{}")
+    )
+    control_plane_job_admission_overrides = {
+        str(job_type): {
+            key: int(value)
+            for key, value in dict(limits).items()
+            if key in {"max_queued", "max_inflight"}
+        }
+        for job_type, limits in raw_job_admission_overrides.items()
+        if isinstance(limits, dict)
+    }
     control_plane_worker_stale_after_s = float(
         os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "15.0")
     )
@@ -350,6 +371,9 @@ def load_settings() -> Settings:
         control_plane_job_poll_interval_s=control_plane_job_poll_interval_s,
         control_plane_job_lease_ttl_s=control_plane_job_lease_ttl_s,
         control_plane_job_heartbeat_interval_s=control_plane_job_heartbeat_interval_s,
+        control_plane_job_max_queued_per_type=control_plane_job_max_queued_per_type,
+        control_plane_job_max_inflight_per_type=control_plane_job_max_inflight_per_type,
+        control_plane_job_admission_overrides=control_plane_job_admission_overrides,
         control_plane_worker_stale_after_s=control_plane_worker_stale_after_s,
         planner_provider=planner_provider,
         planner_model=planner_model,

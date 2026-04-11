@@ -1199,6 +1199,128 @@ def test_control_plane_server_exposes_dead_letter_jobs(monkeypatch, tmp_path: Pa
         thread.join(timeout=5)
 
 
+def test_control_plane_server_exposes_metrics_snapshot(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"label": "metrics"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-metrics-http",
+        operation_id=None,
+        max_attempts=1,
+    )
+    repositories.workers.heartbeat_worker(
+        worker_id="worker-http-metrics",
+        managed_by_server=False,
+        poll_interval_s=0.25,
+        lease_ttl_s=5.0,
+        heartbeat_interval_s=1.0,
+    )
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "GET",
+            "/metrics",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.close()
+
+        assert response.status == 200
+        assert payload["jobs"]["totals"]["jobs"] == 1
+        assert payload["jobs"]["counts_by_status"]["queued"] == 1
+        assert payload["workers"]["totals"]["workers"] == 1
+        assert payload["worker_process"]["managed_by_server"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_rejects_job_when_admission_limit_reached(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_INFLIGHT_PER_TYPE", "1")
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        headers = {
+            "Content-Type": "application/json",
+            **_request_headers(
+                "writer-token",
+                actor="release-manager-1",
+                role="release-manager",
+                idempotency_key="admission-limit-1",
+            ),
+        }
+        connection.request(
+            "POST",
+            "/jobs/export-governance-summary",
+            body=json.dumps({"title": "First queued job"}),
+            headers=headers,
+        )
+        first_response = connection.getresponse()
+        first_payload = json.loads(first_response.read().decode("utf-8"))
+        connection.request(
+            "POST",
+            "/jobs/export-governance-summary",
+            body=json.dumps({"title": "Second queued job"}),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="admission-limit-2",
+                ),
+            },
+        )
+        second_response = connection.getresponse()
+        second_payload = json.loads(second_response.read().decode("utf-8"))
+        connection.request(
+            "GET",
+            "/audit-events?event_type=admission_denied&limit=5",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        audit_response = connection.getresponse()
+        audit_payload = json.loads(audit_response.read().decode("utf-8"))
+        connection.close()
+
+        assert first_response.status == 202
+        assert first_payload["status"] == "queued"
+        assert second_response.status == 429
+        assert second_payload["error"]["code"] == "job_admission_rejected"
+        assert second_payload["error"]["details"]["limit_kind"] == "max_inflight"
+        assert audit_response.status == 200
+        assert audit_payload["rows"]
+        assert audit_payload["rows"][0]["event_type"] == "admission_denied"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_control_plane_server_runs_weekly_status_export_job(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     _seed_release_state()

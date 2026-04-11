@@ -14,6 +14,7 @@ from agent_architect_lab.cli import (
     cmd_control_plane_job_queue_status,
     cmd_control_plane_dead_letter_jobs,
     cmd_control_plane_workers,
+    cmd_control_plane_metrics,
     cmd_environment_history,
     cmd_deploy_policy,
     cmd_deploy_release,
@@ -242,6 +243,40 @@ def test_cmd_control_plane_dead_letter_jobs_lists_failed_jobs(monkeypatch, tmp_p
     assert payload["rows"][0]["job_id"] == job.job_id
     assert payload["rows"][0]["dead_letter"] is True
     assert payload["rows"][0]["error_code"] == "job_execution_failed"
+
+
+def test_cmd_control_plane_metrics_summarizes_jobs_workers_and_admission(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_QUEUED_PER_TYPE", "7")
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "backup.zip")},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-metrics",
+        operation_id=None,
+        max_attempts=1,
+    )
+    repositories.workers.heartbeat_worker(
+        worker_id="worker-metrics",
+        managed_by_server=False,
+        poll_interval_s=0.25,
+        lease_ttl_s=5.0,
+        heartbeat_interval_s=1.0,
+    )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_control_plane_metrics()
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["jobs"]["totals"]["jobs"] == 1
+    assert payload["jobs"]["counts_by_status"]["queued"] == 1
+    assert payload["workers"]["totals"]["workers"] == 1
+    assert payload["admission"]["default_max_queued_per_type"] == 7
 
 
 def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Path) -> None:

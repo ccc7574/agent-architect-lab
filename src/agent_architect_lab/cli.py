@@ -20,6 +20,7 @@ from agent_architect_lab.control_plane.maintenance import (
     verify_control_plane_backup,
 )
 from agent_architect_lab.control_plane.jobs import build_dead_letter_summary
+from agent_architect_lab.control_plane.metrics import build_control_plane_metrics_snapshot
 from agent_architect_lab.control_plane.reporting import (
     build_operator_handoff_payload,
     export_governance_summary_report,
@@ -146,6 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
     control_plane_dead_letter_jobs_cmd = subparsers.add_parser(
         "control-plane-dead-letter-jobs",
         help="List failed control-plane jobs that currently sit in the dead-letter view.",
+    )
+    control_plane_metrics_cmd = subparsers.add_parser(
+        "control-plane-metrics",
+        help="Show a compact control-plane metrics snapshot for jobs, workers, and admission limits.",
     )
     backup_control_plane_storage_cmd = subparsers.add_parser(
         "backup-control-plane-storage",
@@ -1013,6 +1018,25 @@ def cmd_control_plane_dead_letter_jobs() -> int:
         now=utc_now_iso(),
     )
     print(json.dumps(payload, indent=2))
+    return 0
+
+
+def cmd_control_plane_metrics() -> int:
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    print(
+        json.dumps(
+            build_control_plane_metrics_snapshot(
+                settings=settings,
+                job_store=repositories.jobs,
+                worker_store=repositories.workers,
+                worker_alive=False,
+                worker_id="local-cli",
+                managed_by_server=False,
+            ),
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -2171,6 +2195,8 @@ def main() -> int:
         return cmd_control_plane_workers()
     if args.command == "control-plane-dead-letter-jobs":
         return cmd_control_plane_dead_letter_jobs()
+    if args.command == "control-plane-metrics":
+        return cmd_control_plane_metrics()
     if args.command == "backup-control-plane-storage":
         return cmd_backup_control_plane_storage(args.output, args.label)
     if args.command == "verify-control-plane-backup":
