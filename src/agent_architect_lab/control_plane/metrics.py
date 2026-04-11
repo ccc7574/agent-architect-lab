@@ -16,6 +16,7 @@ def build_control_plane_metrics_snapshot(
     worker_alive: bool,
     worker_id: str,
     managed_by_server: bool,
+    allowed_job_types: list[str] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     generated_at = now or utc_now_iso()
@@ -44,6 +45,7 @@ def build_control_plane_metrics_snapshot(
             "alive": worker_alive,
             "worker_id": worker_id,
             "managed_by_server": managed_by_server,
+            "allowed_job_types": list(allowed_job_types or []),
         },
         "admission": {
             "default_max_queued_per_type": settings.control_plane_job_max_queued_per_type,

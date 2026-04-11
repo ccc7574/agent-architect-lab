@@ -155,6 +155,7 @@ class ControlPlaneApp:
                             "poll_interval_s": self.job_worker.poll_interval_s,
                             "lease_ttl_s": self.job_worker.lease_ttl_s,
                             "heartbeat_interval_s": self.job_worker.heartbeat_interval_s,
+                            "allowed_job_types": list(self.job_worker.allowed_job_types),
                         },
                         "auth": {
                             "read_token_configured": bool(self.auth.read_token),
@@ -194,6 +195,7 @@ class ControlPlaneApp:
                             worker_alive=self.job_worker.is_alive(),
                             worker_id=self.job_worker.worker_id,
                             managed_by_server=self.job_worker.managed_by_server,
+                            allowed_job_types=self.job_worker.allowed_job_types,
                         ),
                     )
                 )
@@ -1640,6 +1642,7 @@ def create_control_plane_server(
     host: str | None = None,
     port: int | None = None,
     start_worker: bool = True,
+    worker_allowed_job_types: list[str] | None = None,
 ) -> tuple[ControlPlaneHTTPServer, ControlPlaneApp]:
     resolved_settings = settings or load_settings()
     repositories = create_local_control_plane_repositories(resolved_settings)
@@ -1647,6 +1650,7 @@ def create_control_plane_server(
         settings=resolved_settings,
         repositories=repositories,
         managed_by_server=start_worker,
+        allowed_job_types=worker_allowed_job_types,
     )
     server = ControlPlaneHTTPServer(
         (host or resolved_settings.control_plane_host, port if port is not None else resolved_settings.control_plane_port),
@@ -1663,14 +1667,21 @@ def build_control_plane_app(
     settings: Settings | None = None,
     repositories: ControlPlaneRepositories | None = None,
     managed_by_server: bool = True,
+    allowed_job_types: list[str] | None = None,
 ) -> ControlPlaneApp:
     resolved_settings = settings or load_settings()
     resolved_repositories = repositories or create_local_control_plane_repositories(resolved_settings)
+    resolved_allowed_job_types = (
+        resolved_settings.control_plane_worker_allowed_job_types
+        if allowed_job_types is None
+        else allowed_job_types
+    )
     job_worker = ControlPlaneJobWorker(
         settings=resolved_settings,
         store=resolved_repositories.jobs,
         worker_repository=resolved_repositories.workers,
         managed_by_server=managed_by_server,
+        allowed_job_types=resolved_allowed_job_types,
     )
     return ControlPlaneApp(
         settings=resolved_settings,

@@ -21,6 +21,7 @@ class ControlPlaneWorkerRecord:
     poll_interval_s: float
     lease_ttl_s: float
     heartbeat_interval_s: float
+    allowed_job_types: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +34,7 @@ class ControlPlaneWorkerRecord:
             "poll_interval_s": self.poll_interval_s,
             "lease_ttl_s": self.lease_ttl_s,
             "heartbeat_interval_s": self.heartbeat_interval_s,
+            "allowed_job_types": list(self.allowed_job_types),
         }
 
     def stale_after_s(self, *, minimum_stale_after_s: float = 15.0) -> float:
@@ -53,6 +55,7 @@ class ControlPlaneWorkerRecord:
             poll_interval_s=float(payload.get("poll_interval_s", 0.0)),
             lease_ttl_s=float(payload.get("lease_ttl_s", 0.0)),
             heartbeat_interval_s=float(payload.get("heartbeat_interval_s", 0.0)),
+            allowed_job_types=_normalize_job_types(payload.get("allowed_job_types")),
         )
 
 
@@ -85,6 +88,7 @@ class ControlPlaneWorkerRepository(Protocol):
         poll_interval_s: float,
         lease_ttl_s: float,
         heartbeat_interval_s: float,
+        allowed_job_types: list[str] | None = None,
         status: str = "running",
     ) -> ControlPlaneWorkerRecord: ...
 
@@ -110,11 +114,13 @@ class JsonControlPlaneWorkerStore:
         poll_interval_s: float,
         lease_ttl_s: float,
         heartbeat_interval_s: float,
+        allowed_job_types: list[str] | None = None,
         status: str = "running",
     ) -> ControlPlaneWorkerRecord:
         with self._lock:
             registry = ControlPlaneWorkerRegistry.load(self.path)
             now = utc_now_iso()
+            normalized_job_types = _normalize_job_types(allowed_job_types)
             for worker in registry.workers:
                 if worker.worker_id != worker_id:
                     continue
@@ -125,6 +131,7 @@ class JsonControlPlaneWorkerStore:
                 worker.poll_interval_s = poll_interval_s
                 worker.lease_ttl_s = lease_ttl_s
                 worker.heartbeat_interval_s = heartbeat_interval_s
+                worker.allowed_job_types = normalized_job_types
                 registry.save(self.path)
                 return worker
             worker = ControlPlaneWorkerRecord(
@@ -137,6 +144,7 @@ class JsonControlPlaneWorkerStore:
                 poll_interval_s=poll_interval_s,
                 lease_ttl_s=lease_ttl_s,
                 heartbeat_interval_s=heartbeat_interval_s,
+                allowed_job_types=normalized_job_types,
             )
             registry.workers.append(worker)
             registry.workers.sort(key=lambda item: (item.updated_at, item.worker_id), reverse=True)
@@ -184,6 +192,25 @@ def _parse_timestamp(value: str | None) -> datetime | None:
     if timestamp.tzinfo is None:
         return timestamp.replace(tzinfo=UTC)
     return timestamp.astimezone(UTC)
+
+
+def _normalize_job_types(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value]
+    else:
+        items = [str(value).strip()]
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
 
 
 def build_worker_view(

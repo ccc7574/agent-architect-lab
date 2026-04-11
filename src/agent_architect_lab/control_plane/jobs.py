@@ -37,6 +37,25 @@ JobPayload = dict[str, Any]
 JobHandler = Callable[[Settings, JobPayload], dict[str, Any]]
 
 
+def normalize_job_types(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value]
+    else:
+        items = [str(value).strip()]
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
 @dataclass(slots=True)
 class ControlPlaneJob:
     job_id: str
@@ -160,7 +179,13 @@ class ControlPlaneJobRepository(Protocol):
 
     def summarize_jobs(self, *, now: str | None = None) -> dict[str, Any]: ...
 
-    def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None: ...
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_ttl_s: float,
+        allowed_job_types: list[str] | None = None,
+    ) -> ControlPlaneJob | None: ...
 
     def heartbeat_job(self, job_id: str, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob: ...
 
@@ -246,11 +271,22 @@ class ControlPlaneJobStore:
             registry = ControlPlaneJobRegistry.load(self.path)
         return _job_summary(registry.jobs, now=now or utc_now_iso())
 
-    def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None:
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_ttl_s: float,
+        allowed_job_types: list[str] | None = None,
+    ) -> ControlPlaneJob | None:
         with self._lock:
             registry = ControlPlaneJobRegistry.load(self.path)
             requeued = _requeue_stale_jobs(registry, now=utc_now_iso())
-            queued_jobs = [job for job in registry.jobs if job.status == "queued"]
+            allowed = set(normalize_job_types(allowed_job_types))
+            queued_jobs = [
+                job
+                for job in registry.jobs
+                if job.status == "queued" and (not allowed or job.job_type in allowed)
+            ]
             if not queued_jobs:
                 if requeued:
                     registry.save(self.path)
@@ -369,6 +405,7 @@ class ControlPlaneJobWorker:
         handlers: dict[str, JobHandler] | None = None,
         poll_interval_s: float | None = None,
         managed_by_server: bool = True,
+        allowed_job_types: list[str] | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -379,6 +416,7 @@ class ControlPlaneJobWorker:
         self.heartbeat_interval_s = settings.control_plane_job_heartbeat_interval_s
         self.worker_id = f"worker-{uuid4().hex[:10]}"
         self.managed_by_server = managed_by_server
+        self.allowed_job_types = normalize_job_types(allowed_job_types)
         self._stop_event = Event()
         self._thread: Thread | None = None
 
@@ -413,7 +451,11 @@ class ControlPlaneJobWorker:
     def run_once(self) -> bool:
         self._heartbeat_worker(status="running")
         self.store.requeue_stale_jobs()
-        job = self.store.claim_next_job(worker_id=self.worker_id, lease_ttl_s=self.lease_ttl_s)
+        job = self.store.claim_next_job(
+            worker_id=self.worker_id,
+            lease_ttl_s=self.lease_ttl_s,
+            allowed_job_types=self.allowed_job_types,
+        )
         if job is None:
             return False
         self._process_job(job)
@@ -491,6 +533,7 @@ class ControlPlaneJobWorker:
             poll_interval_s=self.poll_interval_s,
             lease_ttl_s=self.lease_ttl_s,
             heartbeat_interval_s=self.heartbeat_interval_s,
+            allowed_job_types=self.allowed_job_types,
             status=status,
         )
 

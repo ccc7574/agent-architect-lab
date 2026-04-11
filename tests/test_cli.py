@@ -133,6 +133,42 @@ def test_cmd_run_control_plane_worker_processes_one_job(monkeypatch, tmp_path: P
     assert repositories.workers.list_workers(limit=5)[0].status == "stopped"
 
 
+def test_cmd_run_control_plane_worker_respects_job_type_ownership(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    unmatched = repositories.jobs.create_job(
+        job_type="verify_control_plane_backup",
+        payload={"backup_path": str(tmp_path / "missing.zip")},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-worker-owned-unmatched",
+        operation_id=None,
+        max_attempts=1,
+    )
+    matched = repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "owned-backup.zip"), "label": "worker-owned"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-worker-owned-matched",
+        operation_id=None,
+        max_attempts=1,
+    )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_run_control_plane_worker(True, None, ["backup_control_plane_storage"])
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["status"] == "completed"
+    assert payload["processed_jobs"] == 1
+    assert payload["allowed_job_types"] == ["backup_control_plane_storage"]
+    assert repositories.jobs.get_job(unmatched.job_id).status == "queued"
+    assert repositories.jobs.get_job(matched.job_id).status == "succeeded"
+
+
 def test_cmd_control_plane_job_queue_status_summarizes_jobs(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
     settings = load_settings()
@@ -169,6 +205,7 @@ def test_cmd_control_plane_workers_lists_worker_registry(monkeypatch, tmp_path: 
         poll_interval_s=0.25,
         lease_ttl_s=5.0,
         heartbeat_interval_s=1.0,
+        allowed_job_types=["backup_control_plane_storage", "export_governance_summary"],
     )
 
     buffer = io.StringIO()
@@ -181,6 +218,10 @@ def test_cmd_control_plane_workers_lists_worker_registry(monkeypatch, tmp_path: 
     assert payload["summary"]["counts_by_health"]["healthy"] == 1
     assert payload["rows"][0]["worker_id"] == "worker-test"
     assert payload["rows"][0]["health_status"] == "healthy"
+    assert payload["rows"][0]["allowed_job_types"] == [
+        "backup_control_plane_storage",
+        "export_governance_summary",
+    ]
 
 
 def test_cmd_control_plane_workers_marks_stale_heartbeats(monkeypatch, tmp_path: Path) -> None:

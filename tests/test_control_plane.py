@@ -768,6 +768,41 @@ def test_control_plane_job_store_requeues_expired_lease(monkeypatch, tmp_path: P
     assert refreshed.lease_expires_at is None
 
 
+def test_control_plane_job_store_claim_respects_allowed_job_types(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    settings = load_settings()
+    store = ControlPlaneJobStore(settings.control_plane_job_registry_path)
+    ignored = store.create_job(
+        job_type="verify_control_plane_backup",
+        payload={"backup_path": str(tmp_path / "missing.zip")},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-claim-json-ignored",
+        operation_id=None,
+        max_attempts=1,
+    )
+    selected = store.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"label": "claim-json-selected"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-claim-json-selected",
+        operation_id=None,
+        max_attempts=1,
+    )
+
+    claimed = store.claim_next_job(
+        worker_id="worker-json-owned",
+        lease_ttl_s=5.0,
+        allowed_job_types=["backup_control_plane_storage"],
+    )
+
+    assert claimed is not None
+    assert claimed.job_id == selected.job_id
+    assert store.get_job(ignored.job_id).status == "queued"
+    assert store.get_job(selected.job_id).status == "running"
+
+
 def test_sqlite_job_store_requeues_expired_lease(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
     settings = load_settings()
@@ -796,6 +831,41 @@ def test_sqlite_job_store_requeues_expired_lease(monkeypatch, tmp_path: Path) ->
     assert refreshed.queue_reason == "lease_expired_retry"
     assert refreshed.worker_id is None
     assert refreshed.lease_expires_at is None
+
+
+def test_sqlite_job_store_claim_respects_allowed_job_types(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path, control_plane_backend="sqlite")
+    settings = load_settings()
+    store = SQLiteControlPlaneJobStore(settings.control_plane_sqlite_path)
+    ignored = store.create_job(
+        job_type="verify_control_plane_backup",
+        payload={"backup_path": str(tmp_path / "missing.zip")},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-claim-sqlite-ignored",
+        operation_id=None,
+        max_attempts=1,
+    )
+    selected = store.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"label": "claim-sqlite-selected"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-claim-sqlite-selected",
+        operation_id=None,
+        max_attempts=1,
+    )
+
+    claimed = store.claim_next_job(
+        worker_id="worker-sqlite-owned",
+        lease_ttl_s=5.0,
+        allowed_job_types=["backup_control_plane_storage"],
+    )
+
+    assert claimed is not None
+    assert claimed.job_id == selected.job_id
+    assert store.get_job(ignored.job_id).status == "queued"
+    assert store.get_job(selected.job_id).status == "running"
 
 
 def test_control_plane_server_smoke_exposes_read_and_write_routes(monkeypatch, tmp_path: Path) -> None:
@@ -1134,6 +1204,37 @@ def test_control_plane_server_exposes_registered_workers(monkeypatch, tmp_path: 
         thread.join(timeout=5)
 
 
+def test_control_plane_server_health_exposes_worker_job_ownership(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_ALLOWED_JOB_TYPES",
+        "backup_control_plane_storage,export_governance_summary",
+    )
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request("GET", "/health")
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.close()
+
+        assert response.status == 200
+        assert payload["worker"]["managed_by_server"] is False
+        assert payload["worker"]["allowed_job_types"] == [
+            "backup_control_plane_storage",
+            "export_governance_summary",
+        ]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_control_plane_server_filters_stale_workers(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
     monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "0.01")
@@ -1252,6 +1353,7 @@ def test_control_plane_server_exposes_dead_letter_jobs(monkeypatch, tmp_path: Pa
 
 def test_control_plane_server_exposes_metrics_snapshot(monkeypatch, tmp_path: Path) -> None:
     _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_ALLOWED_JOB_TYPES", "backup_control_plane_storage")
     settings = load_settings()
     repositories = create_local_control_plane_repositories(settings)
     repositories.jobs.create_job(
@@ -1295,6 +1397,7 @@ def test_control_plane_server_exposes_metrics_snapshot(monkeypatch, tmp_path: Pa
         assert payload["jobs"]["counts_by_status"]["queued"] == 1
         assert payload["workers"]["totals"]["workers"] == 1
         assert payload["worker_process"]["managed_by_server"] is False
+        assert payload["worker_process"]["allowed_job_types"] == ["backup_control_plane_storage"]
     finally:
         server.shutdown()
         server.server_close()
@@ -2002,7 +2105,7 @@ def test_control_plane_server_supports_sqlite_backend(monkeypatch, tmp_path: Pat
         assert create_response.status == 202
         assert health_response.status == 200
         assert health_payload["storage"]["backend"] == "sqlite"
-        assert health_payload["storage"]["schema_version"] == 4
+        assert health_payload["storage"]["schema_version"] == 5
         assert final_payload is not None
         assert final_payload["status"] == "succeeded"
         assert Path(final_payload["result_payload"]["saved_to"]).exists()
@@ -2086,7 +2189,7 @@ def test_control_plane_server_reports_storage_status_and_runs_backup_job(monkeyp
         backup_path = Path(final_payload["result_payload"]["saved_to"]) if final_payload is not None else None
         assert status_response.status == 200
         assert status_payload["backend"] == "sqlite"
-        assert status_payload["schema_version"] == 4
+        assert status_payload["schema_version"] == 5
         assert status_payload["integrity_check"] == "ok"
         assert create_response.status == 202
         assert final_payload is not None
@@ -2097,7 +2200,7 @@ def test_control_plane_server_reports_storage_status_and_runs_backup_job(monkeyp
             manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "sqlite/control-plane.sqlite3" in names
         assert manifest["backend"] == "sqlite"
-        assert manifest["storage_status"]["schema_version"] == 4
+        assert manifest["storage_status"]["schema_version"] == 5
     finally:
         server.shutdown()
         server.server_close()
@@ -2283,7 +2386,7 @@ def test_sqlite_control_plane_repositories_migrate_legacy_schema(monkeypatch, tm
         limit=5,
     )
 
-    assert get_sqlite_schema_version(sqlite_path) == 4
+    assert get_sqlite_schema_version(sqlite_path) == 5
     assert migrated_events
     assert migrated_events[0].payload["audit_event_id"] == "audit-legacy-1"
     assert migrated_events[0].payload["route_policy_key"] == "read_governance"
@@ -2305,7 +2408,7 @@ def test_control_plane_storage_cli_status_and_backup(monkeypatch, tmp_path: Path
     backup_payload = json.loads(backup_stdout.getvalue())
 
     assert status_payload["backend"] == "sqlite"
-    assert status_payload["schema_version"] == 4
+    assert status_payload["schema_version"] == 5
     assert backup_payload["backend"] == "sqlite"
     assert Path(backup_payload["saved_to"]).exists()
     with zipfile.ZipFile(backup_path) as archive:

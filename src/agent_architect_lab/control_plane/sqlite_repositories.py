@@ -12,6 +12,7 @@ from agent_architect_lab.control_plane.jobs import (
     ControlPlaneJobRepository,
     _job_summary,
     _lease_deadline,
+    normalize_job_types,
 )
 from agent_architect_lab.control_plane.storage import AuditEvent, IdempotencyRecord
 from agent_architect_lab.control_plane.workers import (
@@ -22,7 +23,7 @@ from agent_architect_lab.control_plane.workers import (
 from agent_architect_lab.models import utc_now_iso
 
 
-CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 4
+CONTROL_PLANE_SQLITE_SCHEMA_VERSION = 5
 _SCHEMA_NAME = "control_plane"
 
 
@@ -343,19 +344,31 @@ class SQLiteControlPlaneJobStore(SQLiteRepositoryMixin, ControlPlaneJobRepositor
                 ).fetchall()
         return _job_summary([_job_from_row(row) for row in rows], now=now or utc_now_iso())
 
-    def claim_next_job(self, *, worker_id: str, lease_ttl_s: float) -> ControlPlaneJob | None:
+    def claim_next_job(
+        self,
+        *,
+        worker_id: str,
+        lease_ttl_s: float,
+        allowed_job_types: list[str] | None = None,
+    ) -> ControlPlaneJob | None:
+        allowed = normalize_job_types(allowed_job_types)
+        parameters: list[Any] = []
+        sql = """
+            SELECT * FROM control_plane_jobs
+            WHERE status = 'queued'
+        """
+        if allowed:
+            sql += " AND job_type IN ({})".format(",".join("?" for _ in allowed))
+            parameters.extend(allowed)
+        sql += """
+            ORDER BY created_at ASC, job_id ASC
+            LIMIT 1
+        """
         with self._lock:
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 _requeue_stale_jobs_sql(connection, now=utc_now_iso())
-                row = connection.execute(
-                    """
-                    SELECT * FROM control_plane_jobs
-                    WHERE status = 'queued'
-                    ORDER BY created_at ASC, job_id ASC
-                    LIMIT 1
-                    """
-                ).fetchone()
+                row = connection.execute(sql, parameters).fetchone()
                 if row is None:
                     connection.commit()
                     return None
@@ -556,9 +569,11 @@ class SQLiteControlPlaneWorkerStore(SQLiteRepositoryMixin, ControlPlaneWorkerRep
         poll_interval_s: float,
         lease_ttl_s: float,
         heartbeat_interval_s: float,
+        allowed_job_types: list[str] | None = None,
         status: str = "running",
     ) -> ControlPlaneWorkerRecord:
         now = utc_now_iso()
+        normalized_job_types = json.dumps(normalize_job_types(allowed_job_types), sort_keys=True)
         with self._lock:
             with self._connect() as connection:
                 connection.execute(
@@ -572,8 +587,9 @@ class SQLiteControlPlaneWorkerStore(SQLiteRepositoryMixin, ControlPlaneWorkerRep
                         managed_by_server,
                         poll_interval_s,
                         lease_ttl_s,
-                        heartbeat_interval_s
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        heartbeat_interval_s,
+                        allowed_job_types
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(worker_id) DO UPDATE SET
                         status = excluded.status,
                         updated_at = excluded.updated_at,
@@ -581,7 +597,8 @@ class SQLiteControlPlaneWorkerStore(SQLiteRepositoryMixin, ControlPlaneWorkerRep
                         managed_by_server = excluded.managed_by_server,
                         poll_interval_s = excluded.poll_interval_s,
                         lease_ttl_s = excluded.lease_ttl_s,
-                        heartbeat_interval_s = excluded.heartbeat_interval_s
+                        heartbeat_interval_s = excluded.heartbeat_interval_s,
+                        allowed_job_types = excluded.allowed_job_types
                     """,
                     (
                         worker_id,
@@ -593,6 +610,7 @@ class SQLiteControlPlaneWorkerStore(SQLiteRepositoryMixin, ControlPlaneWorkerRep
                         poll_interval_s,
                         lease_ttl_s,
                         heartbeat_interval_s,
+                        normalized_job_types,
                     ),
                 )
                 row = connection.execute(
@@ -658,6 +676,8 @@ def _ensure_sqlite_control_plane_schema(connection: sqlite3.Connection) -> int:
             _apply_schema_v3(connection)
         elif next_version == 4:
             _apply_schema_v4(connection)
+        elif next_version == 5:
+            _apply_schema_v5(connection)
         else:  # pragma: no cover - defensive future guard
             raise ValueError(f"Unsupported SQLite schema migration target: {next_version}")
         _write_schema_version(connection, next_version)
@@ -707,6 +727,8 @@ def _has_legacy_tables(connection: sqlite3.Connection) -> bool:
 
 def _infer_legacy_schema_version(connection: sqlite3.Connection) -> int:
     if _has_table(connection, "control_plane_workers"):
+        if _has_column(connection, "control_plane_workers", "allowed_job_types"):
+            return 5
         return 4
     if _has_column(connection, "audit_events", "route_policy_key"):
         if _has_column(connection, "control_plane_jobs", "worker_id"):
@@ -826,6 +848,15 @@ def _apply_schema_v4(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    _ensure_v1_indexes(connection)
+
+
+def _apply_schema_v5(connection: sqlite3.Connection) -> None:
+    _apply_schema_v4(connection)
+    if not _has_column(connection, "control_plane_workers", "allowed_job_types"):
+        connection.execute(
+            "ALTER TABLE control_plane_workers ADD COLUMN allowed_job_types TEXT NOT NULL DEFAULT '[]'"
+        )
     _ensure_v1_indexes(connection)
 
 
@@ -984,6 +1015,7 @@ def _worker_from_row(row: sqlite3.Row) -> ControlPlaneWorkerRecord:
         poll_interval_s=float(row["poll_interval_s"]),
         lease_ttl_s=float(row["lease_ttl_s"]),
         heartbeat_interval_s=float(row["heartbeat_interval_s"]),
+        allowed_job_types=_json_list(row["allowed_job_types"]) if "allowed_job_types" in row.keys() else [],
     )
 
 
@@ -1049,6 +1081,18 @@ def _json_dict(value: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return {str(key): item for key, item in payload.items()}
+
+
+def _json_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    try:
+        payload = json.loads(str(value))
+    except json.JSONDecodeError:
+        return normalize_job_types(value)
+    if not isinstance(payload, list):
+        return normalize_job_types(payload)
+    return normalize_job_types(payload)
 
 
 def _optional_text(value: Any) -> str | None:

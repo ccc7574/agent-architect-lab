@@ -31,6 +31,15 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --hos
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker
 ```
 
+To shard ownership by job type, constrain either the embedded worker or a standalone worker:
+
+```bash
+export AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_ALLOWED_JOB_TYPES=export_governance_summary,export_weekly_status
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --host 127.0.0.1 --port 8080
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --host 127.0.0.1 --port 8080 --worker-job-type export_release_runbook
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker --job-type backup_control_plane_storage --job-type verify_control_plane_backup
+```
+
 For batch-style process workers you can also use:
 
 ```bash
@@ -81,6 +90,8 @@ SQLite schema migrations run automatically on startup. The `/health` response ex
 
 If you need stricter or looser worker liveness detection, set `AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S`.
 
+If you need worker ownership or sharding by job type, set `AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_ALLOWED_JOB_TYPES`.
+
 If you need stricter job admission guardrails, set:
 
 - `AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_MAX_QUEUED_PER_TYPE`
@@ -121,6 +132,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_JOB_ADMISSION_OVERRIDES='{
 - Policy rejections now include structured `error.details` metadata for dashboards and audits
 - `/health` now reports whether the worker is server-managed or expected to run externally
 - `/health` now also reports worker-registry totals so dashboards can quickly spot embedded versus standalone worker coverage
+- `/health`, `/metrics`, `/workers`, and the standalone worker CLI output now expose `allowed_job_types` so operators can verify worker ownership and sharding intent
 - Control-plane storage status, backup archives, restore drills, and SQLite counts now include the worker registry alongside jobs, idempotency, and audit state
 
 Default role policy keys:

@@ -118,6 +118,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not start the embedded job worker. Use this when running a separate worker process.",
     )
+    run_control_plane_server.add_argument(
+        "--worker-job-type",
+        dest="worker_job_types",
+        action="append",
+        default=None,
+        help="Optional embedded-worker ownership filter. Repeat to constrain the server worker to specific job types.",
+    )
     run_control_plane_worker = subparsers.add_parser(
         "run-control-plane-worker",
         help="Run the control-plane job worker as a standalone process.",
@@ -132,6 +139,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Optional idle timeout before the standalone worker exits.",
+    )
+    run_control_plane_worker.add_argument(
+        "--job-type",
+        dest="job_types",
+        action="append",
+        default=None,
+        help="Optional worker ownership filter. Repeat to constrain the worker to specific job types.",
     )
     control_plane_storage_status_cmd = subparsers.add_parser(
         "control-plane-storage-status",
@@ -892,13 +906,33 @@ def cmd_run_mcp_server() -> int:
     return 0
 
 
-def cmd_run_control_plane_server(host: str, port: int | None, no_worker: bool) -> int:
+def _resolve_worker_job_types(job_types: list[str] | None, configured_job_types: list[str]) -> list[str]:
+    selected = configured_job_types if job_types is None else job_types
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in selected:
+        value = str(item).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def cmd_run_control_plane_server(
+    host: str,
+    port: int | None,
+    no_worker: bool,
+    worker_job_types: list[str] | None = None,
+) -> int:
     settings = load_settings()
+    allowed_job_types = _resolve_worker_job_types(worker_job_types, settings.control_plane_worker_allowed_job_types)
     server, app = create_control_plane_server(
         settings=settings,
         host=host or settings.control_plane_host,
         port=port if port is not None else settings.control_plane_port,
         start_worker=not no_worker,
+        worker_allowed_job_types=allowed_job_types,
     )
     bound_host, bound_port = server.server_address[:2]
     print(
@@ -912,6 +946,7 @@ def cmd_run_control_plane_server(host: str, port: int | None, no_worker: bool) -
                 "mutation_token_configured": bool(app.auth.mutation_token),
                 "embedded_worker": not no_worker,
                 "worker_id": app.job_worker.worker_id,
+                "allowed_job_types": list(app.job_worker.allowed_job_types),
             },
             indent=2,
         ),
@@ -926,13 +961,19 @@ def cmd_run_control_plane_server(host: str, port: int | None, no_worker: bool) -
     return 0
 
 
-def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> int:
+def cmd_run_control_plane_worker(
+    once: bool,
+    idle_timeout_s: float | None,
+    job_types: list[str] | None = None,
+) -> int:
     settings = load_settings()
     repositories = create_local_control_plane_repositories(settings)
+    allowed_job_types = _resolve_worker_job_types(job_types, settings.control_plane_worker_allowed_job_types)
     worker = build_control_plane_app(
         settings=settings,
         repositories=repositories,
         managed_by_server=False,
+        allowed_job_types=allowed_job_types,
     ).job_worker
     worker.heartbeat_worker(status="running")
     payload: dict[str, object] = {
@@ -944,6 +985,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
         "heartbeat_interval_s": worker.heartbeat_interval_s,
         "mode": "once" if once else "service",
         "idle_timeout_s": idle_timeout_s,
+        "allowed_job_types": list(worker.allowed_job_types),
     }
     if once:
         processed = worker.run_once()
@@ -965,6 +1007,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
                         "worker_id": worker.worker_id,
                         "processed_jobs": processed_jobs,
                         "idle_timeout_s": idle_timeout_s,
+                        "allowed_job_types": list(worker.allowed_job_types),
                     },
                     indent=2,
                 ),
@@ -982,6 +1025,7 @@ def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> in
                     "status": "stopped",
                     "service": "agent-architect-lab-control-plane-worker",
                     "worker_id": worker.worker_id,
+                    "allowed_job_types": list(worker.allowed_job_types),
                 },
                 indent=2,
             ),
@@ -1049,6 +1093,7 @@ def cmd_control_plane_metrics() -> int:
                 worker_alive=False,
                 worker_id="local-cli",
                 managed_by_server=False,
+                allowed_job_types=settings.control_plane_worker_allowed_job_types,
             ),
             indent=2,
         )
@@ -2230,9 +2275,9 @@ def main() -> int:
     if args.command == "run-mcp-server":
         return cmd_run_mcp_server()
     if args.command == "run-control-plane-server":
-        return cmd_run_control_plane_server(args.host, args.port, args.no_worker)
+        return cmd_run_control_plane_server(args.host, args.port, args.no_worker, args.worker_job_types)
     if args.command == "run-control-plane-worker":
-        return cmd_run_control_plane_worker(args.once, args.idle_timeout_s)
+        return cmd_run_control_plane_worker(args.once, args.idle_timeout_s, args.job_types)
     if args.command == "control-plane-storage-status":
         return cmd_control_plane_storage_status()
     if args.command == "control-plane-job-queue-status":

@@ -44,6 +44,7 @@ class Settings:
     control_plane_job_max_queued_per_type: int
     control_plane_job_max_inflight_per_type: int
     control_plane_job_admission_overrides: dict[str, dict[str, int]]
+    control_plane_worker_allowed_job_types: list[str]
     control_plane_worker_stale_after_s: float
     planner_provider: str
     planner_model: str
@@ -240,6 +241,11 @@ def load_settings() -> Settings:
         for job_type, limits in raw_job_admission_overrides.items()
         if isinstance(limits, dict)
     }
+    control_plane_worker_allowed_job_types = [
+        item.strip()
+        for item in os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_ALLOWED_JOB_TYPES", "").split(",")
+        if item.strip()
+    ]
     control_plane_worker_stale_after_s = float(
         os.environ.get("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "15.0")
     )
@@ -374,6 +380,7 @@ def load_settings() -> Settings:
         control_plane_job_max_queued_per_type=control_plane_job_max_queued_per_type,
         control_plane_job_max_inflight_per_type=control_plane_job_max_inflight_per_type,
         control_plane_job_admission_overrides=control_plane_job_admission_overrides,
+        control_plane_worker_allowed_job_types=control_plane_worker_allowed_job_types,
         control_plane_worker_stale_after_s=control_plane_worker_stale_after_s,
         planner_provider=planner_provider,
         planner_model=planner_model,
