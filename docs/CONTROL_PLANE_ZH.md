@@ -368,6 +368,7 @@ curl \
 - 最新的 planner shadow artifact
 - 最新的 release command brief artifact
 - 这两类 runtime-realism artifact 的简单计数
+- governance summary、weekly status、release runbook 导出的 JSON sidecar 与 artifact-lineage 区块
 
 这样管理层视角的治理输出就不再只看到传统的 release / incident 状态，也能看到 model-backed planner validation 和 bounded role-handoff readiness。
 
@@ -484,10 +485,11 @@ curl \
 这层 control plane 是有意做窄的：
 
 - 读模型优先服务治理、审阅和值班流程
-- 当前写接口只覆盖 incident 创建与状态推进
+- 当前写接口覆盖 incident 创建、状态推进、follow-up eval 绑定，以及各类导出/备份 job 提交
 - 长时间运行的导出已经走持久化 worker，并带有自动重试和人工 requeue，但还不是分布式队列
 - 存储仍然是本地 artifact JSON，而不是外部数据库
 - 权限现在已经通过集中式 route/payload policy engine 执行，但还不是完整统一的 RBAC 或外部 policy service
+- 导出的治理 artifact 现在也会带 machine-readable lineage，但这仍然是文件级方案，还不是集中式 metadata service
 - 现在已经有幂等、审计和 job persistence，但还没有分布式队列、分布式锁和更强的一致性协调
 
 这意味着它已经足够像一套内部生产治理服务，可以支撑本地演练和内部工具接入，同时仍然保持依赖轻、容易测试。

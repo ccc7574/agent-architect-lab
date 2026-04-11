@@ -6,6 +6,15 @@ from pathlib import Path
 from re import sub
 from typing import Any
 
+from agent_architect_lab.artifact_lineage import (
+    artifact_entry,
+    artifact_lineage_rows,
+    build_governance_summary_lineage,
+    build_operator_handoff_lineage,
+    build_planner_shadow_lineage,
+    build_release_runbook_lineage,
+    build_weekly_status_lineage,
+)
 from agent_architect_lab.agent.orchestration import export_release_command_brief
 from agent_architect_lab.config import Settings
 from agent_architect_lab.harness.incidents import get_incident_review_board, list_incidents
@@ -32,7 +41,7 @@ from agent_architect_lab.models import utc_now_iso
 
 def build_runtime_realism_payload(settings: Settings) -> dict[str, Any]:
     planner_shadow_reports = _load_runtime_json_artifacts(
-        settings.reports_dir.glob("planner-shadow*.json"),
+        settings.reports_dir.glob("*planner-shadow*.json"),
         required_keys={"suite_name", "candidate_provider", "policy_pass_rate"},
     )
     release_command_briefs = _load_runtime_json_artifacts(
@@ -123,7 +132,7 @@ def build_governance_summary_payload(
     ]
     releases = [row.to_dict() for row in list_releases(ledger_path=settings.release_ledger_path)]
     runtime_realism = build_runtime_realism_payload(settings)
-    return {
+    payload = {
         "generated_at": utc_now_iso(),
         "environments": selected_environments,
         "release_risk_board": release_risk_board,
@@ -160,6 +169,8 @@ def build_governance_summary_payload(
             "release_command_brief_count": runtime_realism["metrics"]["release_command_brief_count"],
         },
     }
+    payload["lineage"] = build_governance_summary_lineage(settings, runtime_realism=runtime_realism)
+    return payload
 
 
 def build_operator_handoff_payload(
@@ -205,6 +216,7 @@ def build_operator_handoff_payload(
         active_names = [row.incident_id for row in incident_review_board.rows if row.status not in {"resolved", "closed"}]
         if active_names:
             payload["summary"] += " Active incidents: " + ", ".join(active_names[:5]) + "."
+    payload["lineage"] = build_operator_handoff_lineage(settings)
     return payload
 
 
@@ -316,7 +328,15 @@ def export_governance_summary_report(
         render_governance_summary_markdown(payload, title=report_title),
         encoding="utf-8",
     )
-    return {"saved_to": str(output_path), "title": report_title, "metrics": payload["metrics"]}
+    json_path = output_path.with_suffix(".json")
+    json_path.write_text(json.dumps({"title": report_title, **payload}, indent=2), encoding="utf-8")
+    return {
+        "saved_to": str(output_path),
+        "json_path": str(json_path),
+        "title": report_title,
+        "metrics": payload["metrics"],
+        "lineage": payload["lineage"],
+    }
 
 
 def build_release_runbook_payload(
@@ -391,7 +411,7 @@ def build_release_runbook_payload(
         active_overrides=active_overrides,
     )
     verification_commands = _build_release_runbook_verification_commands(release_name, selected_environments)
-    return {
+    payload = {
         "generated_at": utc_now_iso(),
         "release_name": release_name,
         "environments": selected_environments,
@@ -405,6 +425,12 @@ def build_release_runbook_payload(
         "execution_plan": execution_plan,
         "verification_commands": verification_commands,
     }
+    payload["lineage"] = build_release_runbook_lineage(
+        settings,
+        release_name=release_name,
+        active_incidents=active_incidents,
+    )
+    return payload
 
 
 def export_release_runbook_report(
@@ -432,12 +458,16 @@ def export_release_runbook_report(
         render_release_runbook_markdown(payload, title=report_title),
         encoding="utf-8",
     )
+    json_path = output_path.with_suffix(".json")
+    json_path.write_text(json.dumps({"title": report_title, **payload}, indent=2), encoding="utf-8")
     return {
         "saved_to": str(output_path),
+        "json_path": str(json_path),
         "title": report_title,
         "release_name": release_name,
         "environments": payload["environments"],
         "step_count": len(payload["execution_plan"]),
+        "lineage": payload["lineage"],
     }
 
 
@@ -452,6 +482,7 @@ def export_planner_shadow_report(
     title: str,
 ) -> dict[str, Any]:
     provider = create_planner_provider(settings)
+    markdown_path_hint = Path(markdown_output) if markdown_output else settings.reports_dir / "planner-shadow.md"
     report = run_planner_shadow_suite(
         suite_name,
         provider,
@@ -460,6 +491,12 @@ def export_planner_shadow_report(
         settings=settings,
     )
     report_path = settings.reports_dir / report_name
+    report.lineage = build_planner_shadow_lineage(
+        settings,
+        suite_name=suite_name,
+        report_path=report_path,
+        markdown_path=markdown_path_hint,
+    )
     report.save(report_path)
     markdown_path = export_planner_shadow_markdown(
         report,
@@ -474,6 +511,7 @@ def export_planner_shadow_report(
         "candidate_provider": report.candidate_provider,
         "policy_pass_rate": report.policy_pass_rate,
         "all_passed": report.all_passed,
+        "lineage": report.lineage,
     }
 
 
@@ -503,6 +541,7 @@ def export_release_command_brief_report(
         "release_name": brief.release_name,
         "pattern": brief.pattern,
         "recommended_action": brief.recommended_action,
+        "lineage": brief.lineage,
     }
 
 
@@ -586,7 +625,7 @@ def build_weekly_status_payload(
     recurring_incident_rows = _top_frequency_rows(incident_release_frequency, key_name="release_or_environment")
     recurring_stale_rows = _top_frequency_rows(stale_release_frequency, key_name="release_name")
 
-    return {
+    payload = {
         "generated_at": utc_now_iso(),
         "window": {
             "since_days": max(1, since_days),
@@ -603,6 +642,12 @@ def build_weekly_status_payload(
         },
         "recent_handoffs": recent_handoffs,
     }
+    payload["lineage"] = build_weekly_status_lineage(
+        settings,
+        current_governance=governance_summary,
+        snapshot_paths=[path for path, _payload in selected_snapshots],
+    )
+    return payload
 
 
 def export_weekly_status_report(
@@ -633,8 +678,11 @@ def export_weekly_status_report(
         render_weekly_status_markdown(payload, title=report_title),
         encoding="utf-8",
     )
+    json_path = output_path.with_suffix(".json")
+    json_path.write_text(json.dumps({"title": report_title, **payload}, indent=2), encoding="utf-8")
     return {
         "saved_to": str(output_path),
+        "json_path": str(json_path),
         "title": report_title,
         "window": payload["window"],
         "top_recurring_high_risk_release": (
@@ -642,6 +690,7 @@ def export_weekly_status_report(
             if payload["historical_patterns"]["recurring_high_risk_releases"]
             else None
         ),
+        "lineage": payload["lineage"],
     }
 
 
@@ -975,6 +1024,10 @@ def render_governance_summary_markdown(payload: dict[str, Any], *, title: str) -
             ],
         )
     )
+    lineage_rows = artifact_lineage_rows(payload.get("lineage") or {}, limit=12)
+    if lineage_rows:
+        lines.extend(["", "## Artifact Lineage", ""])
+        lines.extend(render_markdown_table(["Kind", "File", "Exists", "Notes"], lineage_rows))
     lines.append("")
     return "\n".join(lines)
 
@@ -1135,6 +1188,10 @@ def render_release_runbook_markdown(payload: dict[str, Any], *, title: str) -> s
                 ],
             )
         )
+    lineage_rows = artifact_lineage_rows(payload.get("lineage") or {}, limit=12)
+    if lineage_rows:
+        lines.extend(["", "## Artifact Lineage", ""])
+        lines.extend(render_markdown_table(["Kind", "File", "Exists", "Notes"], lineage_rows))
     lines.append("")
     return "\n".join(lines)
 
@@ -1260,6 +1317,10 @@ def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str
             ],
         )
     )
+    lineage_rows = artifact_lineage_rows(payload.get("lineage") or {}, limit=12)
+    if lineage_rows:
+        lines.extend(["", "## Artifact Lineage", ""])
+        lines.extend(render_markdown_table(["Kind", "File", "Exists", "Notes"], lineage_rows))
     lines.append("")
     return "\n".join(lines)
 

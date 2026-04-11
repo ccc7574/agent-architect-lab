@@ -18,17 +18,17 @@
 
 ## 核心结论
 
-1. 现在已经有 service 边界，而且 mutation 已经具备幂等、审计、route-level role policy、持久化导出任务语义，以及显式的 policy/storage 分层，但这层还比较窄。
-   仓库已经具备内部 HTTP surface、读写分离的 token 边界、请求重放保护、mutation 审计轨迹、按路由校验 actor/role 的能力、集中式的内置 policy engine、repository 风格的 persistence boundary，以及持久化的内置导出 worker，但还缺分布式队列和覆盖全部状态流转的后台 worker。
+1. 对这个仓库当前的本地/内部演练范围来说，治理 artifact 层已经基本成形。
+   incident bundle、governance summary、weekly status、release runbook、operator handoff snapshot、planner shadow、release command brief 都已经能稳定导出。新一批导出还会同时产出 Markdown 和 JSON sidecar，并带显式 artifact lineage。
 
-2. incident 管理已经落地，但 incident closure loop 还不够完整。
-   现在可以记录 incident、推进状态、挂 follow-up eval 路径，但还没有形成完整的 incident artifact bundle。
+2. control plane 已经足够支撑 production-style drill，但仍然是单机、刻意收窄的边界。
+   现在已经有 token 边界、请求重放保护、审计轨迹、route-level actor/role policy、持久化 job、follow-up eval linkage、backup/restore 工作流，但仍缺分布式队列、共享锁、外部数据库，以及更完整的 release-state HTTP mutation surface。
 
-3. 治理数据已经很多，但主管/经理视角的摘要层还不够。
-   目前更适合值班人员操作，还缺“本周有哪些长期卡住的 release / incident / override”这类汇总视图。
+3. runtime realism 已经不再只是脚手架，但仍不是完整的 hosted release path。
+   planner shadow 能验证 planner 第一步行为，bounded role handoff 也已经能把 release command ownership 结构化表达出来，但默认执行仍然以 heuristic runtime 为主，多角色模式也还停留在 artifact-level，而不是 worker-execution-level。
 
-4. 仓库当前在“发布治理正确性”上强于“运行时真实感”。
-   这意味着它已经很适合训练 AI 架构师的 control plane 思维，但还没完全覆盖 model-backed planner、服务化 control plane、多角色协同这些真实平台问题。
+4. 剩余最大的缺口集中在 retrieval 深度、human feedback ingestion 和平台部署形态。
+   当前仍然主要是本地 note 的 lexical retrieval，还没有把 human feedback 当成一等训练信号，也还没有建成分布式 control plane 或更真实的多租户服务形态。
 
 ## 已完成里程碑
 
@@ -41,49 +41,45 @@
 - 轻量 HTTP control plane，支持治理读接口和 incident 写接口
 - operator handoff 生成、留档、历史浏览、Markdown 导出
 - incident ledger、incident 状态流转、incident review board
+- incident bundle 导出，关联 release、handoff、follow-up eval artifact
+- governance summary、weekly status、release runbook 导出
+- planner shadow validation 与 bounded release command brief 导出
+- 关键治理与 runtime-realism 导出内置 artifact lineage
 - 中英文 operator 文档
 
 ## 后续完整计划
 
-### Phase 1: 治理 Artifact Bundle
+### Phase 1: 加固 Control Plane 的部署形态
 
-目标：所有关键治理流程都能稳定产出可复用文档，而不是只给 JSON。
+目标：把现在已经很强的本地 control plane，继续推进成更像真实多节点服务的形态。
 
-- 把 incident review board 导出为 Markdown
-- 增加跨 release 的治理汇总报告导出
-- 增加面向主管/经理的周报级状态摘要
+- 用队列 + 独立 worker 进程替换当前持久化的内置 worker
+- 把存储从本地 artifact JSON 继续推进到更真实的服务后端
+- 把鉴权和策略继续升级到更完整的 RBAC 或外部 policy integration
+- 增强重试、锁、恢复和一致性协调语义
 
-### Phase 2: Incident Closure Loop
+### Phase 2: 深化 Runtime Realism
 
-目标：把 incident 真正接回改进闭环。
+目标：让 hosted planner 和多角色 runtime 更接近真实发布系统。
 
-- 增加 incident bundle 导出，关联 release、report、handoff、follow-up eval
-- 在 incident close 前检查是否挂上 follow-up eval
-- 增加给 incident 绑定已有 eval artifact 的 CLI 能力
+- 把 model-backed planner provider 从 first-step shadow 扩展到端到端 release flow
+- 增加在线 shadow run 和 live-model policy validation
+- 把 bounded role handoff 扩展为真正的 role-specialized worker execution
 
-### Phase 3: 加固 Service-Grade Control Plane
+### Phase 3: 加强 Knowledge 与 Feedback Loop
 
-目标：把已经存在的内部服务边界继续加固成更像真实生产系统的控制面。
+目标：补齐一线 AI 架构师最常被要求承担的 retrieval 与学习闭环能力。
 
-- 在 bearer token 之上继续补 role-aware policy enforcement
-- 给 state-changing request 增加幂等与审计 envelope
-- 给慢操作增加队列或后台 worker
-
-### Phase 4: Runtime Realism
-
-目标：让仓库更接近一线 AI 公司对 AI 架构师的真实要求。
-
-- 把 model-backed planner provider 纳入自动化测试
-- 增加 live-model shadow run 和 policy validation
-- 增加受边界约束的 multi-agent orchestration 示例
+- 把 retrieval 从 note 搜索继续推进到 provenance-aware knowledge routing
+- 把 human feedback ingestion 接进 incident、eval、release review 闭环
+- 把 prompts、tools、notes、traces、checkpoints、review decisions 继续串成更强的 lineage/analytics 视图
 
 ## 推荐推进顺序
 
-1. 先补 incident / governance artifact bundle 导出
-2. 再把 incident close 条件和 follow-up eval 绑定做严
-3. 再补主管视角的摘要层
-4. 然后继续加固 control plane 的权限、请求语义和后台执行
-5. 最后加强 runtime realism
+1. 先把 control plane 的部署形态继续做实
+2. 再深化 hosted planner 和多角色 runtime realism
+3. 再补 retrieval provenance 与 human feedback ingestion
+4. 最后再继续扩大服务边界
 
 ## 这个仓库何时算“对当前 scope 足够生产级”
 
@@ -93,5 +89,6 @@
 - 每个 release blocker 都有治理路径
 - 每个 incident 都有明确生命周期和 follow-up eval 关联
 - 每次 shift handoff 都能被留档并导出为可读文档
+- 主要治理导出都同时带有 machine-readable lineage
 - 所有关键治理路径都有自动化测试覆盖
 - 剩余差距主要在部署形态，而不是 control-plane 逻辑缺失

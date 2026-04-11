@@ -246,6 +246,22 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
 
     with redirect_stdout(io.StringIO()):
         cmd_record_operator_handoff([], 10, 10, "incident-shift")
+        cmd_run_planner_shadow(
+            "planner_shadow",
+            "incident-planner-shadow.json",
+            [],
+            [],
+            str(tmp_path / "incident-planner-shadow.md"),
+            "Incident Planner Shadow",
+        )
+        cmd_export_release_command_brief(
+            "release-a",
+            [],
+            5,
+            10,
+            "",
+            "Incident Release Brief",
+        )
 
     bundle_buffer = io.StringIO()
     with redirect_stdout(bundle_buffer):
@@ -264,6 +280,12 @@ def test_cmd_export_incident_bundle_writes_release_and_handoff_context(monkeypat
     assert manifest["followup_eval_bundle_path"] is not None
     assert manifest["related_handoff_snapshot_path"] is not None
     assert manifest["related_handoff_report_path"] is not None
+    kinds = {entry["kind"] for entry in manifest["lineage"]["artifacts"]}
+    assert "incident_bundle_manifest" in kinds
+    assert "release_command_brief_json" in kinds
+    assert "planner_shadow_report" in kinds
+    assert "trace" in kinds
+    assert "checkpoint" in kinds
 
 
 def test_cmd_link_incident_followup_eval_records_explicit_linkage(monkeypatch, tmp_path: Path) -> None:
@@ -335,14 +357,17 @@ def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_
         exit_code = cmd_export_governance_summary([], 10, 10, 10, "", "Weekly Governance Summary")
     payload = json.loads(buffer.getvalue())
     markdown = Path(payload["saved_to"]).read_text(encoding="utf-8")
+    sidecar = json.loads(Path(payload["json_path"]).read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert "# Weekly Governance Summary" in markdown
     assert "## Summary Metrics" in markdown
     assert "## Incident Queue" in markdown
     assert "## Override Pressure" in markdown
+    assert "## Artifact Lineage" in markdown
     assert "unsafe production answer" in markdown
     assert payload["metrics"]["active_incident_count"] == 1
+    assert sidecar["lineage"]["counts"]["artifacts"] >= 2
 
 
 def test_cmd_export_weekly_status_aggregates_handoff_history(monkeypatch, tmp_path: Path) -> None:
@@ -371,6 +396,7 @@ def test_cmd_export_weekly_status_aggregates_handoff_history(monkeypatch, tmp_pa
         exit_code = cmd_export_weekly_status([], 7, 20, 20, 20, 50, "", "Weekly Release Status")
     payload = json.loads(buffer.getvalue())
     markdown = Path(payload["saved_to"]).read_text(encoding="utf-8")
+    sidecar = json.loads(Path(payload["json_path"]).read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert payload["window"]["snapshots_analyzed"] >= 2
@@ -378,8 +404,10 @@ def test_cmd_export_weekly_status_aggregates_handoff_history(monkeypatch, tmp_pa
     assert "# Weekly Release Status" in markdown
     assert "## Recurring High-Risk Releases" in markdown
     assert "## Recurring Override Blockers" in markdown
+    assert "## Artifact Lineage" in markdown
     assert "release-risky" in markdown
     assert "production:environment_frozen" in markdown
+    assert sidecar["lineage"]["counts"]["artifacts"] >= 3
 
 
 def test_cmd_export_release_runbook_writes_markdown(monkeypatch, tmp_path: Path) -> None:
@@ -415,6 +443,7 @@ def test_cmd_export_release_runbook_writes_markdown(monkeypatch, tmp_path: Path)
         exit_code = cmd_export_release_runbook("release-a", [], 10, 10, "", "Release A Runbook")
     payload = json.loads(buffer.getvalue())
     markdown = Path(payload["saved_to"]).read_text(encoding="utf-8")
+    sidecar = json.loads(Path(payload["json_path"]).read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert payload["release_name"] == "release-a"
@@ -423,10 +452,12 @@ def test_cmd_export_release_runbook_writes_markdown(monkeypatch, tmp_path: Path)
     assert "## Release Overview" in markdown
     assert "## Execution Plan" in markdown
     assert "## Verification Commands" in markdown
+    assert "## Artifact Lineage" in markdown
     assert "staging rollback watch" in markdown
     assert "change review exception" in markdown
     assert "deploy-release release-a --environment staging" in markdown
     assert "rollback-release release-a --environment production" in markdown
+    assert sidecar["lineage"]["counts"]["artifacts"] >= 4
 
 
 def test_cmd_run_planner_shadow_writes_policy_report(monkeypatch, tmp_path: Path) -> None:
@@ -450,6 +481,8 @@ def test_cmd_run_planner_shadow_writes_policy_report(monkeypatch, tmp_path: Path
     assert payload["policy_pass_rate"] == 1.0
     assert Path(payload["report_path"]).exists()
     assert Path(payload["markdown_path"]).exists()
+    assert payload["lineage"]["counts"]["artifacts"] >= 2
+    assert "## Artifact Lineage" in Path(payload["markdown_path"]).read_text(encoding="utf-8")
 
 
 def test_cmd_export_release_command_brief_writes_markdown(monkeypatch, tmp_path: Path) -> None:
@@ -496,6 +529,8 @@ def test_cmd_export_release_command_brief_writes_markdown(monkeypatch, tmp_path:
     assert "qa-owner" in markdown
     assert "release-manager" in markdown
     assert "hold_release" in markdown
+    assert "## Artifact Lineage" in markdown
+    assert payload["lineage"]["counts"]["artifacts"] >= 4
 
 
 def test_cmd_release_and_incident_ledger_backup_round_trip(monkeypatch, tmp_path: Path) -> None:

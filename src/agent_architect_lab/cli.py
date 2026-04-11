@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from re import sub
 
+from agent_architect_lab.artifact_lineage import build_incident_bundle_lineage, build_planner_shadow_lineage
 from agent_architect_lab.agent.orchestration import export_release_command_brief
 from agent_architect_lab.agent.patterns import PATTERNS, recommend_pattern
 from agent_architect_lab.agent.runtime import AgentRuntime
@@ -17,13 +18,15 @@ from agent_architect_lab.control_plane.maintenance import (
     restore_control_plane_backup,
     verify_control_plane_backup,
 )
-from agent_architect_lab.control_plane.reporting import export_release_runbook_report
-from agent_architect_lab.control_plane.reporting import export_weekly_status_report
-from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
-from agent_architect_lab.control_plane.server import (
-    build_governance_summary_payload,
-    create_control_plane_server,
+from agent_architect_lab.control_plane.reporting import (
+    build_operator_handoff_payload,
+    export_governance_summary_report,
+    export_release_runbook_report,
+    export_weekly_status_report,
+    record_operator_handoff_snapshot,
 )
+from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
+from agent_architect_lab.control_plane.server import create_control_plane_server
 from agent_architect_lab.evals.tasks import list_available_suites, load_default_suite, load_suite
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
@@ -43,7 +46,6 @@ from agent_architect_lab.harness.ledger import (
     deploy_release,
     get_environment_history,
     get_override_review_board,
-    get_operator_handoff,
     get_release_readiness_digest,
     get_release_risk_board,
     get_rollout_matrix,
@@ -669,6 +671,16 @@ def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
     }
     manifest_path = bundle_dir / "bundle-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest["lineage"] = build_incident_bundle_lineage(
+        settings,
+        incident_record=incident_record,
+        bundle_manifest_path=manifest_path,
+        incident_report_path=incident_report_path,
+        handoff_snapshot_path=handoff_snapshot_path,
+        handoff_report_path=handoff_report_path,
+        followup_eval_bundle_path=followup_eval_bundle_path,
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(
         json.dumps(
             {
@@ -678,6 +690,7 @@ def cmd_export_incident_bundle(incident_id: str, output_dir: str) -> int:
                 "incident_report_path": str(incident_report_path),
                 "followup_eval_bundle_path": str(followup_eval_bundle_path) if followup_eval_bundle_path else None,
                 "handoff_report_path": str(handoff_report_path) if handoff_report_path else None,
+                "lineage": manifest["lineage"],
             },
             indent=2,
         )
@@ -997,6 +1010,7 @@ def cmd_run_planner_shadow(
 ) -> int:
     settings = load_settings()
     provider = create_planner_provider(settings)
+    markdown_path = Path(markdown_output) if markdown_output else settings.reports_dir / "planner-shadow.md"
     report = run_planner_shadow_suite(
         suite_name,
         provider,
@@ -1005,6 +1019,12 @@ def cmd_run_planner_shadow(
         settings=settings,
     )
     report_path = settings.reports_dir / report_name
+    report.lineage = build_planner_shadow_lineage(
+        settings,
+        suite_name=suite_name,
+        report_path=report_path,
+        markdown_path=markdown_path,
+    )
     report.save(report_path)
     payload = report.to_dict()
     payload["report_path"] = str(report_path)
@@ -1250,43 +1270,12 @@ def _build_operator_handoff_payload(
     override_limit: int,
 ) -> dict:
     settings = load_settings()
-    handoff = get_operator_handoff(
-        environments=environments or settings.environment_names,
-        ledger_path=settings.release_ledger_path,
-        production_soak_minutes=settings.production_soak_minutes,
-        required_approver_roles=settings.production_required_approver_roles,
-        environment_policies=settings.environment_policies,
-        environment_freeze_windows=settings.environment_freeze_windows,
-        override_expiring_soon_minutes=settings.override_expiring_soon_minutes,
-        release_stale_minutes=settings.release_stale_minutes,
-        approval_stale_minutes=settings.approval_stale_minutes,
+    return build_operator_handoff_payload(
+        settings,
+        environments=environments,
         release_limit=release_limit,
         override_limit=override_limit,
     )
-    incident_review_board = get_incident_review_board(
-        ledger_path=settings.incident_ledger_path,
-        stale_minutes=settings.incident_stale_minutes,
-        status=None,
-        limit=override_limit,
-    )
-    active_incidents = [
-        row.to_dict()
-        for row in list_incidents(
-            ledger_path=settings.incident_ledger_path,
-            status=None,
-            severity=None,
-            limit=override_limit,
-        )
-        if row.status not in {"resolved", "closed"}
-    ]
-    payload = handoff.to_dict()
-    payload["incident_review_board"] = incident_review_board.to_dict()
-    payload["active_incidents"] = active_incidents
-    if incident_review_board.rows:
-        active_names = [row.incident_id for row in incident_review_board.rows if row.status not in {"resolved", "closed"}]
-        if active_names:
-            payload["summary"] += " Active incidents: " + ", ".join(active_names[:5]) + "."
-    return payload
 
 
 def cmd_operator_handoff(environments: list[str], release_limit: int, override_limit: int) -> int:
@@ -1306,19 +1295,14 @@ def cmd_record_operator_handoff(
     label: str,
 ) -> int:
     settings = load_settings()
-    payload = _build_operator_handoff_payload(
+    result = record_operator_handoff_snapshot(
+        settings,
         environments=environments,
         release_limit=release_limit,
         override_limit=override_limit,
+        label=label,
     )
-    safe_label = sub(r"[^a-zA-Z0-9._-]+", "-", label.strip()).strip("-")
-    generated_at = str(payload.get("generated_at", "unknown"))
-    file_name = f"operator-handoff-{generated_at.replace(':', '').replace('+', '_')}"
-    if safe_label:
-        file_name += f"-{safe_label}"
-    output_path = settings.handoffs_dir / f"{file_name}.json"
-    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(json.dumps({"saved_to": str(output_path), "handoff": payload}, indent=2))
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -1775,21 +1759,16 @@ def cmd_export_governance_summary(
     title: str,
 ) -> int:
     settings = load_settings()
-    payload = build_governance_summary_payload(
+    result = export_governance_summary_report(
         settings,
         environments=environments or settings.environment_names,
         release_limit=release_limit,
         incident_limit=incident_limit,
         override_limit=override_limit,
+        output=output,
+        title=title,
     )
-    output_path = Path(output) if output else settings.reports_dir / "governance-summary.md"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    report_title = title.strip() or "Release Governance Summary"
-    output_path.write_text(
-        _render_governance_summary_markdown(payload, title=report_title),
-        encoding="utf-8",
-    )
-    print(json.dumps({"saved_to": str(output_path), "title": report_title, "metrics": payload["metrics"]}, indent=2))
+    print(json.dumps(result, indent=2))
     return 0
 
 

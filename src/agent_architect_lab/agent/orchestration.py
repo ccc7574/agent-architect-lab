@@ -5,6 +5,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_architect_lab.artifact_lineage import (
+    artifact_entry,
+    artifact_lineage_rows,
+    build_release_lineage,
+    extend_lineage,
+)
 from agent_architect_lab.config import Settings, load_settings
 from agent_architect_lab.harness.incidents import list_incidents
 from agent_architect_lab.harness.ledger import (
@@ -63,6 +69,7 @@ class ReleaseCommandBrief:
     recommended_action: str
     roles: list[RoleBrief]
     handoffs: list[RoleHandoff]
+    lineage: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +81,7 @@ class ReleaseCommandBrief:
             "recommended_action": self.recommended_action,
             "roles": [role.to_dict() for role in self.roles],
             "handoffs": [handoff.to_dict() for handoff in self.handoffs],
+            "lineage": self.lineage,
         }
 
     def save_json(self, path: Path) -> None:
@@ -278,6 +286,11 @@ def build_release_command_brief(
         recommended_action=recommended_action,
         roles=roles,
         handoffs=handoffs,
+        lineage=build_release_lineage(
+            resolved_settings,
+            release_name=release_name,
+            include_latest_planner_shadow=True,
+        ),
     )
 
 
@@ -317,6 +330,19 @@ def render_release_command_brief_markdown(
         if role.recommendations:
             for recommendation in role.recommendations:
                 lines.append(f"- Recommendation: {recommendation}")
+    lineage_rows = artifact_lineage_rows(brief.lineage, limit=12)
+    if lineage_rows:
+        lines.extend(
+            [
+                "",
+                "## Artifact Lineage",
+                "",
+                "| Kind | File | Exists | Notes |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for row in lineage_rows:
+            lines.append("| " + " | ".join(str(item) for item in row) + " |")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -331,6 +357,8 @@ def export_release_command_brief(
     settings: Settings | None = None,
 ) -> tuple[ReleaseCommandBrief, Path, Path]:
     resolved_settings = settings or load_settings()
+    output_path = Path(output) if output else resolved_settings.reports_dir / f"release-command-{release_name}.md"
+    json_path = output_path.with_suffix(".json")
     brief = build_release_command_brief(
         release_name,
         environments=environments,
@@ -338,10 +366,24 @@ def export_release_command_brief(
         incident_limit=incident_limit,
         settings=resolved_settings,
     )
-    output_path = Path(output) if output else resolved_settings.reports_dir / f"release-command-{release_name}.md"
+    brief.lineage = extend_lineage(
+        brief.lineage,
+        label=f"release_command_brief:{release_name}",
+        entries=[
+            artifact_entry(
+                "release_command_brief_markdown",
+                output_path,
+                release_name=release_name,
+            ),
+            artifact_entry(
+                "release_command_brief_json",
+                json_path,
+                release_name=release_name,
+            ),
+        ],
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_release_command_brief_markdown(brief, title=title), encoding="utf-8")
-    json_path = output_path.with_suffix(".json")
     brief.save_json(json_path)
     return brief, output_path, json_path
 

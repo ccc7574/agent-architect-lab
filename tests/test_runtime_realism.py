@@ -101,3 +101,10 @@ def test_build_release_command_brief_combines_role_packets(monkeypatch, tmp_path
     ]
     assert any("Blocked environment" in blocker for blocker in brief.roles[1].blockers)
     assert any("Unresolved incident" in blocker for blocker in brief.roles[2].blockers)
+    kinds = {entry["kind"] for entry in brief.lineage["artifacts"]}
+    assert "release_manifest" in kinds
+    assert "candidate_report" in kinds
+    assert "baseline_report" in kinds
+    assert "trace" in kinds
+    assert "checkpoint" in kinds
+    assert brief.lineage["run_ids"]

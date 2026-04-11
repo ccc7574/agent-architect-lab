@@ -368,6 +368,7 @@ curl \
 - the latest planner shadow artifact
 - the latest release command brief artifact
 - simple counts for both runtime-realism artifact types
+- JSON sidecars plus artifact-lineage sections for governance summary, weekly status, and release runbook exports
 
 This keeps manager-facing governance output aware of model-backed planner validation and bounded role-handoff readiness instead of only classical release and incident state.
 
@@ -484,10 +485,11 @@ curl \
 This control plane is intentionally narrow:
 
 - read models are optimized for governance and review flows
-- write models currently cover incident creation and incident transition
+- write models currently cover incident open/transition/follow-up linkage plus export and backup job submission
 - long-running exports already run through a persisted in-process worker with automatic retry and manual requeue, but not a distributed queue
 - storage is still local artifact-backed JSON, not an external database
 - access control now goes through a centralized route/payload policy engine, but it is not yet a full RBAC or external policy service
+- exported governance artifacts now keep machine-readable lineage, but this is still file-based rather than a centralized metadata service
 - idempotency, audit, and job persistence exist, but there is no distributed queue or lock coordination yet
 
 That makes it suitable for local production-style drills and internal tooling, while keeping the repo dependency-light and testable.

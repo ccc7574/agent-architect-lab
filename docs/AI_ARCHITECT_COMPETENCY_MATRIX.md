@@ -51,10 +51,13 @@ This matrix reflects the capability profile increasingly expected from senior an
 - safeguards-aware shell and tool execution
 - skill-routed retrieval over notes
 - operator and incident-oriented evaluation tracks
+- bounded release-command role ownership
+- artifact lineage across release, incident, handoff, and runtime-realism exports
 
 ## What Still Needs More Work
 
-- model-backed planner providers
-- online and shadow evaluation
+- hosted planner execution in end-to-end release paths, not only first-step shadow validation
+- online shadow evaluation and live-runtime policy backtesting
 - explicit human feedback ingestion
 - true multi-agent execution ownership
+- deeper provenance-aware retrieval beyond local lexical note search

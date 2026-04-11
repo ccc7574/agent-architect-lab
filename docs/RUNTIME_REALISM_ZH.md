@@ -23,6 +23,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli run-planner-shadow \
 
 默认的 `planner_shadow` suite 故意保持范围可控。它的目标是在 rollout 前产出可审阅的 shadow artifact，而不是替代完整回归集。
 
+现在导出的 planner shadow 也会带 artifact lineage，方便把报告回连到数据集以及对应的 Markdown / JSON artifact。
+
 ## Bounded Role Orchestration
 
 当你想生成一个更接近真实 release command 体系的多角色交接产物时，用 `export-release-command-brief`。
@@ -40,6 +42,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-command-brief r
 - 给出确定性的最终建议，例如 `promote`、`promote_with_review`、`hold_release`
 
 它还不是分布式 worker plane，但已经体现出真实 release command system 里的职责边界。
+
+现在导出的结果会同时生成 Markdown brief 和 JSON sidecar，并且在 payload 里带出 artifact lineage，回连 release manifest、baseline/candidate report，以及可用的 trace/checkpoint artifact。
 
 ## 为什么重要
 

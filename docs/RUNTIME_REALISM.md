@@ -23,6 +23,8 @@ What it checks:
 
 The default `planner_shadow` suite keeps the scope intentionally narrow. It is meant to create a reviewable shadow artifact before rollout, not to replace full regression suites.
 
+The export now also carries artifact lineage so the report can be tied back to its dataset and companion Markdown or JSON artifact.
+
 ## Bounded Role Orchestration
 
 Use `export-release-command-brief` when you want a production-shaped example of bounded multi-role handoff grounded in release state.
@@ -40,6 +42,8 @@ What it does:
 - produces a deterministic final recommendation such as `promote`, `promote_with_review`, or `hold_release`
 
 This is not a distributed worker plane yet, but it does model the ownership boundaries used in real release command systems.
+
+The export writes a Markdown brief plus a JSON sidecar, and the payload includes artifact lineage back to release manifests, candidate and baseline reports, plus trace and checkpoint artifacts when available.
 
 ## Why This Matters
 

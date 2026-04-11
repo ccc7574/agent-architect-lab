@@ -122,5 +122,5 @@ Offline harnesses, online shadow runs, dashboards, alerts, rollback, incident re
 2. Extend skill routing from note-backed heuristics into tool and policy selection.
 3. Add a review loop pattern: planner -> executor -> evaluator.
 4. Expand the bounded role orchestration example into broader worker patterns once the release/governance path is fully stable.
-5. Add artifact lineage so a result links to prompts, tools, notes, and checkpoints.
-6. Add online shadow runs and incident feedback into the harness plane.
+5. Deepen artifact lineage from the current report/trace/checkpoint linking into prompt, tool, and note provenance.
+6. Add online shadow runs and explicit incident/human feedback ingestion into the harness plane.

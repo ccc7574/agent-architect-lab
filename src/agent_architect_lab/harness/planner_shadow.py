@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent_architect_lab.artifact_lineage import artifact_lineage_rows
 from agent_architect_lab.agent.memory import MemoryManager
 from agent_architect_lab.config import Settings, load_settings
 from agent_architect_lab.evals.tasks import load_suite
@@ -111,6 +112,7 @@ class PlannerShadowReport:
     baseline_provider: str
     results: list[PlannerShadowTaskResult]
     global_policy: PlannerShadowPolicy = field(default_factory=PlannerShadowPolicy)
+    lineage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def task_count(self) -> int:
@@ -171,6 +173,7 @@ class PlannerShadowReport:
             "all_passed": self.all_passed,
             "global_policy": self.global_policy.to_dict(),
             "results": [result.to_dict() for result in self.results],
+            "lineage": self.lineage,
         }
 
     def save(self, path: Path) -> None:
@@ -227,6 +230,19 @@ def render_planner_shadow_markdown(report: PlannerShadowReport, *, title: str = 
             lines.append(f"- Violations: {', '.join(result.violations)}")
         if result.candidate_decision.error_code:
             lines.append(f"- Candidate planner error: `{result.candidate_decision.error_code}`")
+        lines.append("")
+    lineage_rows = artifact_lineage_rows(report.lineage, limit=12)
+    if lineage_rows:
+        lines.extend(
+            [
+                "## Artifact Lineage",
+                "",
+                "| Kind | File | Exists | Notes |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for row in lineage_rows:
+            lines.append("| " + " | ".join(str(item) for item in row) + " |")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

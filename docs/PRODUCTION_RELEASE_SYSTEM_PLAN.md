@@ -18,17 +18,17 @@ This document reviews the current `agent-architect-lab` repository as if it were
 
 ## Findings
 
-1. A service boundary now exists, and the mutation layer now has audit, idempotency, route-level role policy, persisted export job semantics, and explicit policy/storage layers, but it is still intentionally narrow.
-   The repo now has an internal HTTP surface plus token-gated read/write separation, request replay protection, mutation audit trails, route-scoped actor/role checks, a centralized in-process policy engine, repository-style persistence boundaries, and a persisted in-process export worker, but it still lacks distributed queueing and background workers for all state transitions.
+1. Governance artifacts are now materially complete for the repository's current local scope.
+   Incident bundles, governance summaries, weekly status reports, release runbooks, operator handoff snapshots, planner shadow reports, and bounded release command briefs all exist as durable exports. The newer exports also ship Markdown plus JSON sidecars with explicit artifact lineage.
 
-2. Incident management is now present, but not yet fully wired into eval automation.
-   Incidents can store follow-up eval paths, but the system does not yet generate a complete “incident packet” that bundles report, release, handoff, and follow-up artifacts together.
+2. The control plane boundary is now useful for production-style drills, but it is still single-node and intentionally narrow.
+   The repo now has token-gated read and write boundaries, request replay protection, audit trails, route-scoped actor and role policy, persisted jobs, follow-up eval linkage, and backup/restore workflows. It still lacks distributed queueing, shared locking, external databases, and broader release-state mutation through the HTTP surface.
 
-3. Governance data is available, but there is no manager-facing summary layer beyond Markdown handoff export.
-   Operators can act on detailed views, but leadership/reporting views such as “what is blocked this week” or “what repeatedly triggers overrides” are still missing.
+3. Runtime realism has moved beyond scaffolding, but it is still not a full hosted release path.
+   Planner shadow validates first-step planner behavior and bounded role handoff artifacts model release command ownership, but default execution is still heuristic-first and the multi-role pattern is still artifact-level rather than worker-execution-level.
 
-4. The repo models release correctness better than runtime realism.
-   It now trains strong operational reasoning, but still lacks more advanced production platform concerns such as queued work, role-based ownership, and model-backed planner validation under live conditions.
+4. The biggest remaining gaps are in retrieval depth, human feedback ingestion, and platform deployment shape.
+   The repo still uses lightweight lexical retrieval over local notes, does not yet treat human feedback as a first-class training signal, and does not model a distributed control plane or true service tenancy.
 
 ## Completed Milestones
 
@@ -41,49 +41,45 @@ This document reviews the current `agent-architect-lab` repository as if it were
 - Lightweight HTTP control plane with read-only governance routes and incident mutation routes
 - Operator handoff generation, persistence, history, and Markdown export
 - Incident ledger, incident workflow transitions, and incident review board
+- Incident bundle export with linked release, handoff, and follow-up eval artifacts
+- Governance summary, weekly status, and release runbook exports
+- Planner shadow validation and bounded release command brief exports
+- Artifact lineage embedded into the main governance and runtime-realism exports
 - English and Chinese operator documentation
 
 ## Remaining Plan
 
-### Phase 1: Governance Artifact Bundles
+### Phase 1: Harden The Control Plane Deployment Shape
 
-Goal: make every critical operator workflow produce a reusable artifact, not only JSON output.
+Goal: move from a strong local/internal control plane to a more realistic multi-node service boundary.
 
-- Export incident review board to Markdown
-- Export release governance summary across releases
-- Add compact manager-facing weekly status report generation
+- Replace the persisted in-process worker with a queue and separate worker process model
+- Move storage beyond local artifact-backed JSON into a more realistic service backing store
+- Expand auth and policy toward fuller RBAC or external policy integration
+- Add stronger coordination for retries, locks, and recovery semantics
 
-### Phase 2: Incident Closure Loop
+### Phase 2: Deepen Runtime Realism
 
-Goal: turn incidents into a complete learning loop.
+Goal: turn the hosted planner and multi-role runtime into something closer to a real production release path.
 
-- Add incident bundle export with linked release, report, handoff, and follow-up eval references
-- Track whether a resolved incident has a follow-up eval attached before closure
-- Add CLI helpers for linking an existing eval artifact to an incident
+- Exercise the model-backed planner provider in end-to-end release flows rather than only first-step shadow checks
+- Add online shadow runs and policy validation against live-model planner outputs
+- Expand bounded role handoff into true role-specialized worker execution with ownership boundaries
 
-### Phase 3: Harden The Service-Grade Control Plane
+### Phase 3: Improve Knowledge And Feedback Loops
 
-Goal: move from a narrow internal service to a more production-shaped control plane.
+Goal: make the repo better reflect the retrieval and human-learning expectations placed on senior AI architects.
 
-- Add stronger role-aware policy enforcement on top of bearer tokens
-- Introduce idempotency and audit envelopes for state-changing requests
-- Add queued/background workers for slow release actions and report exports
-
-### Phase 4: Runtime Realism
-
-Goal: align the lab more closely with what senior AI architects must ship.
-
-- Exercise the model-backed planner provider in automated tests
-- Add shadow-run and policy validation for live-model planner outputs
-- Add bounded role-based multi-agent orchestration examples
+- Extend retrieval from lexical note search into stronger provenance-aware knowledge routing
+- Add explicit human feedback ingestion into incident, eval, and release review loops
+- Link prompts, tools, notes, traces, checkpoints, and review decisions into richer lineage and analytics views
 
 ## Recommended Execution Order
 
-1. Finish artifact bundle exports for incidents and governance summaries.
-2. Tighten incident closure rules so follow-up eval linkage becomes first-class.
-3. Add manager-facing summary outputs.
-4. Harden the control plane with stronger auth, request semantics, and background work.
-5. Expand runtime realism after the governance plane is stable.
+1. Harden the deployment shape of the control plane.
+2. Deepen hosted-planner and multi-role runtime realism.
+3. Improve retrieval provenance and human feedback ingestion.
+4. Only after those are stable, widen the service boundary further.
 
 ## Definition Of “Production-Ready Enough” For This Repo
 
@@ -93,5 +89,6 @@ This repository should be considered “production-grade for its scope” when:
 - every release blocker has a review path
 - every incident has a tracked lifecycle and follow-up eval linkage
 - every shift handoff can be persisted and exported as a readable artifact
+- every major governance export also has machine-readable lineage
 - every governance path is covered by automated tests
 - the remaining gap is mostly platform deployment shape, not missing control-plane logic

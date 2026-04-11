@@ -221,6 +221,8 @@ Export an incident bundle with linked release, handoff, and follow-up eval conte
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle incident-20260410-example
 ```
 
+The bundle manifest now also includes artifact lineage back to release evidence, runtime-realism artifacts, and trace/checkpoint files when those sources are available.
+
 Inspect override cleanup priority across releases:
 
 ```bash
@@ -274,17 +276,23 @@ Render a manager-facing governance summary:
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 ```
 
+This now writes both Markdown and a JSON sidecar with artifact lineage.
+
 Render a manager-facing weekly status report using handoff history plus the current governance view:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-weekly-status --title "Weekly Release Status"
 ```
 
+This also writes a JSON sidecar with lineage back to the analyzed handoff snapshots.
+
 Render a bounded role-handoff release command brief:
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-command-brief release-a --title "Release Command Brief"
 ```
+
+The brief includes a Markdown artifact, a JSON sidecar, and lineage back to release evidence.
 
 Render an operator-facing release runbook before a rollout window:
 
@@ -293,6 +301,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-runbook \
   2026-04-10-main \
   --title "Release 2026-04-10 Main Runbook"
 ```
+
+The runbook now also emits a JSON sidecar with artifact lineage.
 
 Inspect ledger storage status before a backup or restore drill:
 

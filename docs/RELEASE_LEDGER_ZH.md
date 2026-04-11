@@ -176,6 +176,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-report inciden
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-incident-bundle incident-20260410-example
 ```
 
+现在生成的 bundle-manifest 还会带 artifact lineage，尽可能回连 release evidence、runtime-realism artifact，以及可用的 trace/checkpoint 文件。
+
 查看 override 整改优先级看板：
 
 ```bash
@@ -229,17 +231,23 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 ```
 
+现在会同时生成 Markdown 和带 artifact lineage 的 JSON sidecar。
+
 结合 handoff 历史和当前治理面，导出一份面向主管/经理的周报：
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-weekly-status --title "Weekly Release Status"
 ```
 
+现在也会生成一个 JSON sidecar，并把 lineage 回连到被分析的 handoff snapshot。
+
 导出一份固定角色交接边界的 release command brief：
 
 ```bash
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-command-brief release-a --title "Release Command Brief"
 ```
+
+这个 brief 现在会同时带 Markdown artifact、JSON sidecar，以及回指 release evidence 的 lineage。
 
 在正式 rollout 前导出一份面向值班人员的 release runbook：
 
@@ -248,6 +256,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-runbook \
   2026-04-10-main \
   --title "Release 2026-04-10 Main Runbook"
 ```
+
+现在导出的 runbook 也会附带带 lineage 的 JSON sidecar。
 
 查看账本存储状态和完整性：
 

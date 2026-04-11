@@ -764,9 +764,11 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         assert create_payload["status"] == "queued"
         assert status_payload["status"] == "succeeded"
         assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        assert Path(status_payload["result_payload"]["json_path"]).exists()
         markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert "Async Governance Summary" in markdown
         assert "## Runtime Realism" in markdown
+        assert "## Artifact Lineage" in markdown
         assert "planner-shadow-preseed.json" in markdown
         assert "release-a" in markdown
         assert audit_response.status == 200
@@ -841,10 +843,12 @@ def test_control_plane_server_runs_weekly_status_export_job(monkeypatch, tmp_pat
         assert create_payload["status"] == "queued"
         assert status_payload["status"] == "succeeded"
         assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        assert Path(status_payload["result_payload"]["json_path"]).exists()
         markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert "Async Weekly Status" in markdown
         assert "## Recurring High-Risk Releases" in markdown
         assert "## Recent Handoffs" in markdown
+        assert "## Artifact Lineage" in markdown
     finally:
         server.shutdown()
         server.server_close()
@@ -909,9 +913,11 @@ def test_control_plane_server_runs_release_runbook_export_job(monkeypatch, tmp_p
         assert create_payload["status"] == "queued"
         assert status_payload["status"] == "succeeded"
         assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        assert Path(status_payload["result_payload"]["json_path"]).exists()
         markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert "Async Release Runbook" in markdown
         assert "## Execution Plan" in markdown
+        assert "## Artifact Lineage" in markdown
         assert "release-status release-a" in markdown
     finally:
         server.shutdown()
@@ -978,6 +984,7 @@ def test_control_plane_server_runs_planner_shadow_export_job(monkeypatch, tmp_pa
         markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert "Async Planner Shadow" in markdown
         assert "## Tasks" in markdown
+        assert "## Artifact Lineage" in markdown
     finally:
         server.shutdown()
         server.server_close()
@@ -1045,6 +1052,7 @@ def test_control_plane_server_runs_release_command_brief_export_job(monkeypatch,
         markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert "Async Release Command Brief" in markdown
         assert "## Handoffs" in markdown
+        assert "## Artifact Lineage" in markdown
         assert "release-manager" in markdown
     finally:
         server.shutdown()
