@@ -111,6 +111,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 - `POST /incidents/{incident_id}/transition`
 - `POST /incidents/{incident_id}/followup-eval`
 - `POST /jobs/export-governance-summary`
+- `POST /jobs/export-weekly-status`
 - `POST /jobs/record-operator-handoff`
 - `POST /jobs/export-operator-handoff-report`
 - `POST /jobs/export-release-runbook`
@@ -244,6 +245,28 @@ curl \
   -d '{
     "title": "Weekly Governance Summary",
     "output": "/tmp/governance-summary.md",
+    "release_limit": 20,
+    "incident_limit": 20,
+    "override_limit": 50
+  }'
+```
+
+Queue a weekly manager status export job:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer writer-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  -H "Idempotency-Key: export-weekly-status-001" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/jobs/export-weekly-status \
+  -d '{
+    "title": "Weekly Release Status",
+    "output": "/tmp/weekly-status.md",
+    "since_days": 7,
+    "snapshot_limit": 20,
     "release_limit": 20,
     "incident_limit": 20,
     "override_limit": 50

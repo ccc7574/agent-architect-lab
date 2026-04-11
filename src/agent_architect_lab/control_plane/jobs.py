@@ -18,6 +18,7 @@ from agent_architect_lab.control_plane.reporting import (
     export_governance_summary_report,
     export_operator_handoff_report,
     export_release_runbook_report,
+    export_weekly_status_report,
     record_operator_handoff_snapshot,
 )
 from agent_architect_lab.harness.ledger_maintenance import (
@@ -358,6 +359,7 @@ class ControlPlaneJobWorker:
 def default_job_handlers() -> dict[str, JobHandler]:
     return {
         "export_governance_summary": _handle_export_governance_summary,
+        "export_weekly_status": _handle_export_weekly_status,
         "record_operator_handoff": _handle_record_operator_handoff,
         "export_operator_handoff_report": _handle_export_operator_handoff_report,
         "export_release_runbook": _handle_export_release_runbook,
@@ -374,6 +376,20 @@ def _handle_export_governance_summary(settings: Settings, payload: JobPayload) -
     return export_governance_summary_report(
         settings,
         environments=list(payload.get("environments", [])),
+        release_limit=int(payload.get("release_limit", 20)),
+        incident_limit=int(payload.get("incident_limit", 20)),
+        override_limit=int(payload.get("override_limit", 50)),
+        output=str(payload.get("output", "")),
+        title=str(payload.get("title", "")),
+    )
+
+
+def _handle_export_weekly_status(settings: Settings, payload: JobPayload) -> dict[str, Any]:
+    return export_weekly_status_report(
+        settings,
+        environments=list(payload.get("environments", [])),
+        since_days=int(payload.get("since_days", 7)),
+        snapshot_limit=int(payload.get("snapshot_limit", 20)),
         release_limit=int(payload.get("release_limit", 20)),
         incident_limit=int(payload.get("incident_limit", 20)),
         override_limit=int(payload.get("override_limit", 50)),

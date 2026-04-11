@@ -23,6 +23,7 @@ from agent_architect_lab.cli import (
     cmd_export_incident_bundle,
     cmd_export_governance_summary,
     cmd_export_release_runbook,
+    cmd_export_weekly_status,
     cmd_grant_release_override,
     cmd_list_incidents,
     cmd_list_active_overrides,
@@ -340,6 +341,43 @@ def test_cmd_export_governance_summary_writes_manager_markdown(monkeypatch, tmp_
     assert "## Override Pressure" in markdown
     assert "unsafe production answer" in markdown
     assert payload["metrics"]["active_incident_count"] == 1
+
+
+def test_cmd_export_weekly_status_aggregates_handoff_history(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_OVERRIDE_EXPIRING_SOON_MINUTES", "999999999")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-risky", "", True, "", "release-risky")
+        cmd_approve_release("release-risky", "qa-owner", "", "approved")
+        cmd_grant_release_override(
+            "release-risky",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "freeze exception",
+            "",
+        )
+        cmd_record_operator_handoff([], 10, 10, "day-1")
+        cmd_record_operator_handoff([], 10, 10, "day-2")
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_export_weekly_status([], 7, 20, 20, 20, 50, "", "Weekly Release Status")
+    payload = json.loads(buffer.getvalue())
+    markdown = Path(payload["saved_to"]).read_text(encoding="utf-8")
+
+    assert exit_code == 0
+    assert payload["window"]["snapshots_analyzed"] >= 2
+    assert payload["top_recurring_high_risk_release"] == "release-risky"
+    assert "# Weekly Release Status" in markdown
+    assert "## Recurring High-Risk Releases" in markdown
+    assert "## Recurring Override Blockers" in markdown
+    assert "release-risky" in markdown
+    assert "production:environment_frozen" in markdown
 
 
 def test_cmd_export_release_runbook_writes_markdown(monkeypatch, tmp_path: Path) -> None:

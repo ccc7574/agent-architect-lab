@@ -274,6 +274,12 @@ Render a manager-facing governance summary:
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 ```
 
+Render a manager-facing weekly status report using handoff history plus the current governance view:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-weekly-status --title "Weekly Release Status"
+```
+
 Render an operator-facing release runbook before a rollout window:
 
 ```bash

@@ -17,6 +17,7 @@ from agent_architect_lab.cli import (
     cmd_ledger_storage_status,
     cmd_approve_release,
     cmd_open_incident,
+    cmd_record_operator_handoff,
     cmd_restore_release_and_incident_ledger_backup,
     cmd_restore_control_plane_backup,
     cmd_run_evals,
@@ -747,6 +748,80 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         assert "Async Governance Summary" in Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
         assert audit_response.status == 200
         assert audit_payload["rows"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_runs_weekly_status_export_job(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    with redirect_stdout(io.StringIO()):
+        cmd_record_operator_handoff([], 10, 10, "weekly-1")
+        cmd_record_operator_handoff([], 10, 10, "weekly-2")
+
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request(
+            "POST",
+            "/jobs/export-weekly-status",
+            body=json.dumps(
+                {
+                    "title": "Async Weekly Status",
+                    "output": str(tmp_path / "async-weekly-status.md"),
+                    "since_days": 7,
+                    "snapshot_limit": 10,
+                    "release_limit": 10,
+                    "incident_limit": 10,
+                    "override_limit": 10,
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-weekly-status-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+        job_id = create_payload["job_id"]
+
+        for _ in range(50):
+            time.sleep(0.05)
+            connection.request(
+                "GET",
+                f"/jobs/{job_id}",
+                headers=_request_headers(
+                    "reader-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                ),
+            )
+            status_response = connection.getresponse()
+            status_payload = json.loads(status_response.read().decode("utf-8"))
+            if status_payload["status"] in {"succeeded", "failed"}:
+                break
+        connection.close()
+
+        assert create_response.status == 202
+        assert create_payload["status"] == "queued"
+        assert status_payload["status"] == "succeeded"
+        assert Path(status_payload["result_payload"]["saved_to"]).exists()
+        markdown = Path(status_payload["result_payload"]["saved_to"]).read_text(encoding="utf-8")
+        assert "Async Weekly Status" in markdown
+        assert "## Recurring High-Risk Releases" in markdown
+        assert "## Recent Handoffs" in markdown
     finally:
         server.shutdown()
         server.server_close()

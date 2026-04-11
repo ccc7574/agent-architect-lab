@@ -364,6 +364,36 @@ class ControlPlaneApp:
                         success_status_code=202,
                     )
                 )
+            if method == "POST" and path == "/jobs/export-weekly-status":
+                authorization, auth_error = authorize("write", "create_export_job")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    self._execute_mutation(
+                        request_id=request_id,
+                        authorization=authorization,
+                        method=method,
+                        path=path,
+                        headers=headers,
+                        body=body,
+                        handler=lambda payload: self._enqueue_job(
+                            job_type="export_weekly_status",
+                            payload={
+                                "environments": _optional_string_list(payload, "environments"),
+                                "since_days": max(1, _optional_int(payload, "since_days", default=7) or 7),
+                                "snapshot_limit": max(1, _optional_int(payload, "snapshot_limit", default=20) or 20),
+                                "release_limit": max(1, _optional_int(payload, "release_limit", default=20) or 20),
+                                "incident_limit": max(1, _optional_int(payload, "incident_limit", default=20) or 20),
+                                "override_limit": max(1, _optional_int(payload, "override_limit", default=50) or 50),
+                                "output": _optional_string(payload, "output") or "",
+                                "title": _optional_string(payload, "title") or "",
+                            },
+                            authorization=authorization,
+                            request_id=request_id,
+                        ),
+                        success_status_code=202,
+                    )
+                )
             if method == "POST" and path == "/jobs/record-operator-handoff":
                 authorization, auth_error = authorize("write", "create_export_job")
                 if auth_error is not None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from re import sub
@@ -396,6 +397,145 @@ def export_release_runbook_report(
         "release_name": release_name,
         "environments": payload["environments"],
         "step_count": len(payload["execution_plan"]),
+    }
+
+
+def build_weekly_status_payload(
+    settings: Settings,
+    *,
+    environments: list[str] | None = None,
+    since_days: int = 7,
+    snapshot_limit: int = 20,
+    release_limit: int = 20,
+    incident_limit: int = 20,
+    override_limit: int = 50,
+) -> dict[str, Any]:
+    selected_environments = environments or settings.environment_names
+    governance_summary = build_governance_summary_payload(
+        settings,
+        environments=selected_environments,
+        release_limit=release_limit,
+        incident_limit=incident_limit,
+        override_limit=override_limit,
+    )
+    cutoff = datetime.now(UTC) - timedelta(days=max(1, since_days))
+    all_snapshots = load_operator_handoff_snapshots(settings.handoffs_dir)
+    filtered_snapshots: list[tuple[Path, dict[str, Any]]] = []
+    for path, payload in all_snapshots:
+        generated_at = _parse_iso_timestamp(str(payload.get("generated_at", "")))
+        if generated_at is None or generated_at < cutoff:
+            continue
+        filtered_snapshots.append((path, payload))
+    selected_snapshots = filtered_snapshots[: max(1, snapshot_limit)]
+
+    high_risk_release_frequency = _count_rows(
+        selected_snapshots,
+        lambda payload: [
+            row.get("release_name")
+            for row in payload.get("release_risk_board", {}).get("rows", [])
+            if row.get("risk_level") == "high" and row.get("release_name")
+        ],
+    )
+    override_blocker_frequency = _count_rows(
+        selected_snapshots,
+        lambda payload: [
+            f"{row.get('environment') or '-'}:{row.get('blocker')}"
+            for row in payload.get("override_review_board", {}).get("rows", [])
+            if row.get("blocker")
+        ],
+    )
+    incident_release_frequency = _count_rows(
+        selected_snapshots,
+        lambda payload: [
+            row.get("release_name") or row.get("environment") or row.get("incident_id")
+            for row in payload.get("active_incidents", [])
+            if row.get("release_name") or row.get("environment") or row.get("incident_id")
+        ],
+    )
+    stale_release_frequency = _count_rows(
+        selected_snapshots,
+        lambda payload: [
+            row.get("release_name")
+            for row in payload.get("release_risk_board", {}).get("rows", [])
+            if row.get("is_stale") and row.get("release_name")
+        ],
+    )
+    recent_handoffs = [
+        {
+            "file_name": path.name,
+            "generated_at": payload.get("generated_at"),
+            "summary": payload.get("summary"),
+            "high_risk_releases": [
+                row.get("release_name")
+                for row in payload.get("release_risk_board", {}).get("rows", [])
+                if row.get("risk_level") == "high"
+            ],
+            "active_incident_count": len(payload.get("active_incidents", [])),
+            "active_override_count": len(payload.get("active_overrides", [])),
+        }
+        for path, payload in selected_snapshots
+    ]
+    recurring_release_rows = _top_frequency_rows(high_risk_release_frequency, key_name="release_name")
+    recurring_override_rows = _top_frequency_rows(override_blocker_frequency, key_name="blocker_key")
+    recurring_incident_rows = _top_frequency_rows(incident_release_frequency, key_name="release_or_environment")
+    recurring_stale_rows = _top_frequency_rows(stale_release_frequency, key_name="release_name")
+
+    return {
+        "generated_at": utc_now_iso(),
+        "window": {
+            "since_days": max(1, since_days),
+            "cutoff": cutoff.isoformat(),
+            "snapshots_analyzed": len(selected_snapshots),
+        },
+        "environments": selected_environments,
+        "current_governance": governance_summary,
+        "historical_patterns": {
+            "recurring_high_risk_releases": recurring_release_rows,
+            "recurring_override_blockers": recurring_override_rows,
+            "recurring_incident_hotspots": recurring_incident_rows,
+            "recurring_stale_releases": recurring_stale_rows,
+        },
+        "recent_handoffs": recent_handoffs,
+    }
+
+
+def export_weekly_status_report(
+    settings: Settings,
+    *,
+    environments: list[str],
+    since_days: int,
+    snapshot_limit: int,
+    release_limit: int,
+    incident_limit: int,
+    override_limit: int,
+    output: str,
+    title: str,
+) -> dict[str, Any]:
+    payload = build_weekly_status_payload(
+        settings,
+        environments=environments or settings.environment_names,
+        since_days=since_days,
+        snapshot_limit=snapshot_limit,
+        release_limit=release_limit,
+        incident_limit=incident_limit,
+        override_limit=override_limit,
+    )
+    output_path = Path(output) if output else settings.reports_dir / "weekly-status.md"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report_title = title.strip() or "Weekly Release Status"
+    output_path.write_text(
+        render_weekly_status_markdown(payload, title=report_title),
+        encoding="utf-8",
+    )
+    return {
+        "saved_to": str(output_path),
+        "title": report_title,
+        "window": payload["window"],
+        "top_recurring_high_risk_release": (
+            payload["historical_patterns"]["recurring_high_risk_releases"][0]["release_name"]
+            if payload["historical_patterns"]["recurring_high_risk_releases"]
+            else None
+        ),
     }
 
 
@@ -862,6 +1002,100 @@ def render_release_runbook_markdown(payload: dict[str, Any], *, title: str) -> s
     return "\n".join(lines)
 
 
+def render_weekly_status_markdown(payload: dict[str, Any], *, title: str) -> str:
+    window = payload.get("window", {})
+    current_governance = payload.get("current_governance", {})
+    metrics = current_governance.get("metrics", {})
+    patterns = payload.get("historical_patterns", {})
+    recent_handoffs = payload.get("recent_handoffs", [])
+
+    lines = [
+        f"# {title}",
+        "",
+        f"- Generated at: {markdown_cell(payload.get('generated_at'))}",
+        f"- Environments: {markdown_cell(payload.get('environments', []))}",
+        f"- Window: last {markdown_cell(window.get('since_days'))} days",
+        f"- Snapshots analyzed: {markdown_cell(window.get('snapshots_analyzed'))}",
+        "",
+        "## Current Metrics",
+        "",
+    ]
+    lines.extend(
+        render_markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Recorded releases", metrics.get("recorded_release_count")],
+                ["High-risk releases", metrics.get("high_risk_release_count")],
+                ["Stale releases", metrics.get("stale_release_count")],
+                ["Approval backlog", metrics.get("approval_backlog_count")],
+                ["Active incidents", metrics.get("active_incident_count")],
+                ["Critical incidents", metrics.get("critical_incident_count")],
+                ["Active overrides", metrics.get("active_override_count")],
+                ["Urgent overrides", metrics.get("urgent_override_count")],
+            ],
+        )
+    )
+    lines.extend(["", "## Recurring High-Risk Releases", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Release", "Occurrences"],
+            [
+                [row.get("release_name"), row.get("occurrences")]
+                for row in patterns.get("recurring_high_risk_releases", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Recurring Override Blockers", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Blocker Key", "Occurrences"],
+            [
+                [row.get("blocker_key"), row.get("occurrences")]
+                for row in patterns.get("recurring_override_blockers", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Recurring Incident Hotspots", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Release Or Environment", "Occurrences"],
+            [
+                [row.get("release_or_environment"), row.get("occurrences")]
+                for row in patterns.get("recurring_incident_hotspots", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Recurring Stale Releases", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Release", "Occurrences"],
+            [
+                [row.get("release_name"), row.get("occurrences")]
+                for row in patterns.get("recurring_stale_releases", [])
+            ],
+        )
+    )
+    lines.extend(["", "## Recent Handoffs", ""])
+    lines.extend(
+        render_markdown_table(
+            ["Generated At", "File", "High-Risk Releases", "Incidents", "Overrides", "Summary"],
+            [
+                [
+                    row.get("generated_at"),
+                    row.get("file_name"),
+                    row.get("high_risk_releases", []),
+                    row.get("active_incident_count"),
+                    row.get("active_override_count"),
+                    row.get("summary"),
+                ]
+                for row in recent_handoffs
+            ],
+        )
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_release_runbook_steps(
     release_name: str,
     *,
@@ -979,3 +1213,32 @@ def _build_release_runbook_verification_commands(
             }
         )
     return rows
+
+
+def _parse_iso_timestamp(value: str) -> datetime | None:
+    if not value.strip():
+        return None
+    observed = datetime.fromisoformat(value)
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=UTC)
+    return observed
+
+
+def _count_rows(
+    snapshots: list[tuple[Path, dict[str, Any]]],
+    extractor,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for _path, payload in snapshots:
+        for key in extractor(payload):
+            if not key:
+                continue
+            counts[str(key)] = counts.get(str(key), 0) + 1
+    return counts
+
+
+def _top_frequency_rows(counts: dict[str, int], *, key_name: str) -> list[dict[str, Any]]:
+    return [
+        {key_name: key, "occurrences": count}
+        for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+    ]

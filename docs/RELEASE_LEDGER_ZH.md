@@ -229,6 +229,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
 ```
 
+结合 handoff 历史和当前治理面，导出一份面向主管/经理的周报：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-weekly-status --title "Weekly Release Status"
+```
+
 在正式 rollout 前导出一份面向值班人员的 release runbook：
 
 ```bash
