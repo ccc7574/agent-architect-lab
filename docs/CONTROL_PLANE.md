@@ -24,6 +24,20 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN=writer-token
 PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --host 127.0.0.1 --port 8080
 ```
 
+To run the HTTP server without the embedded worker:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --host 127.0.0.1 --port 8080 --no-worker
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker
+```
+
+For batch-style process workers you can also use:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker --once
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-worker --idle-timeout-s 30
+```
+
 The server is stdlib-only and keeps artifact storage exactly where the CLI keeps it.
 
 To switch the control plane to SQLite-backed persistence:
@@ -52,6 +66,7 @@ SQLite schema migrations run automatically on startup. The `/health` response ex
 - Running jobs now also carry `worker_id`, `heartbeat_at`, and `lease_expires_at` so stale leases can be recovered
 - Every API response now includes `_meta.request_id` for correlation
 - Policy rejections now include structured `error.details` metadata for dashboards and audits
+- `/health` now reports whether the worker is server-managed or expected to run externally
 
 Default role policy keys:
 

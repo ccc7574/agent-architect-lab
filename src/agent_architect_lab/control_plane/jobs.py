@@ -359,6 +359,7 @@ class ControlPlaneJobWorker:
         store: ControlPlaneJobRepository,
         handlers: dict[str, JobHandler] | None = None,
         poll_interval_s: float | None = None,
+        managed_by_server: bool = True,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -367,6 +368,7 @@ class ControlPlaneJobWorker:
         self.lease_ttl_s = settings.control_plane_job_lease_ttl_s
         self.heartbeat_interval_s = settings.control_plane_job_heartbeat_interval_s
         self.worker_id = f"worker-{uuid4().hex[:10]}"
+        self.managed_by_server = managed_by_server
         self._stop_event = Event()
         self._thread: Thread | None = None
 
@@ -386,45 +388,66 @@ class ControlPlaneJobWorker:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            self.store.requeue_stale_jobs()
-            job = self.store.claim_next_job(worker_id=self.worker_id, lease_ttl_s=self.lease_ttl_s)
-            if job is None:
+            if not self.run_once():
                 self._stop_event.wait(self.poll_interval_s)
+
+    def run_once(self) -> bool:
+        self.store.requeue_stale_jobs()
+        job = self.store.claim_next_job(worker_id=self.worker_id, lease_ttl_s=self.lease_ttl_s)
+        if job is None:
+            return False
+        self._process_job(job)
+        return True
+
+    def run_until_idle(self, idle_timeout_s: float) -> int:
+        idle_started_at = time.monotonic()
+        processed_jobs = 0
+        while not self._stop_event.is_set():
+            processed = self.run_once()
+            if processed:
+                processed_jobs += 1
+                idle_started_at = time.monotonic()
                 continue
-            handler = self.handlers.get(job.job_type)
-            if handler is None:
-                self.store.fail_job(
-                    job.job_id,
-                    {
-                        "code": "unknown_job_type",
-                        "message": f"No worker handler registered for job type '{job.job_type}'.",
-                    },
-                )
-                continue
-            heartbeat_stop = Event()
-            heartbeat_thread = Thread(
-                target=self._heartbeat_loop,
-                args=(job.job_id, heartbeat_stop),
-                name=f"control-plane-job-heartbeat-{job.job_id}",
-                daemon=True,
+            if time.monotonic() - idle_started_at >= idle_timeout_s:
+                break
+            time.sleep(self.poll_interval_s)
+        return processed_jobs
+
+    def _process_job(self, job: ControlPlaneJob) -> None:
+        handler = self.handlers.get(job.job_type)
+        if handler is None:
+            self.store.fail_job(
+                job.job_id,
+                {
+                    "code": "unknown_job_type",
+                    "message": f"No worker handler registered for job type '{job.job_type}'.",
+                },
             )
-            heartbeat_thread.start()
-            try:
-                result_payload = handler(self.settings, dict(job.input_payload))
-            except Exception as exc:  # pragma: no cover - defensive worker boundary
-                heartbeat_stop.set()
-                heartbeat_thread.join(timeout=5)
-                self.store.fail_job(
-                    job.job_id,
-                    {
-                        "code": "job_execution_failed",
-                        "message": str(exc),
-                    },
-                )
-                continue
+            return
+        heartbeat_stop = Event()
+        heartbeat_thread = Thread(
+            target=self._heartbeat_loop,
+            args=(job.job_id, heartbeat_stop),
+            name=f"control-plane-job-heartbeat-{job.job_id}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            result_payload = handler(self.settings, dict(job.input_payload))
+        except Exception as exc:  # pragma: no cover - defensive worker boundary
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=5)
-            self.store.complete_job(job.job_id, result_payload)
+            self.store.fail_job(
+                job.job_id,
+                {
+                    "code": "job_execution_failed",
+                    "message": str(exc),
+                },
+            )
+            return
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=5)
+        self.store.complete_job(job.job_id, result_payload)
 
     def _heartbeat_loop(self, job_id: str, stop_event: Event) -> None:
         while not stop_event.wait(self.heartbeat_interval_s):

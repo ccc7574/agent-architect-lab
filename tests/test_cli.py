@@ -48,6 +48,7 @@ from agent_architect_lab.cli import (
     cmd_rollback_release,
     cmd_release_status,
     cmd_run_evals,
+    cmd_run_control_plane_worker,
     cmd_run_planner_shadow,
     cmd_run_release_shadow,
     cmd_show_operator_handoff,
@@ -57,6 +58,8 @@ from agent_architect_lab.cli import (
     cmd_restore_release_and_incident_ledger_backup,
     cmd_verify_release_and_incident_ledger_backup,
 )
+from agent_architect_lab.config import load_settings
+from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
 from agent_architect_lab.harness.reporting import HarnessReport
 from agent_architect_lab.models import EvalResult
 
@@ -95,6 +98,32 @@ def test_cmd_run_evals_registers_report(monkeypatch, tmp_path: Path) -> None:
     assert "report_registered=report-" in output
     assert payload["records"][0]["report_kind"] == "baseline"
     assert payload["records"][0]["label"] == "approved"
+
+
+def test_cmd_run_control_plane_worker_processes_one_job(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "backup.zip"), "label": "worker-once"},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-worker-once",
+        operation_id=None,
+        max_attempts=1,
+    )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_run_control_plane_worker(True, None)
+    payload = json.loads(buffer.getvalue())
+    jobs = repositories.jobs.list_jobs(limit=5)
+
+    assert exit_code == 0
+    assert payload["status"] == "completed"
+    assert payload["processed_jobs"] == 1
+    assert jobs[0].status == "succeeded"
 
 
 def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Path) -> None:

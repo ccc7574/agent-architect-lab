@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import time
 from dataclasses import asdict
 from pathlib import Path
 from re import sub
@@ -26,7 +27,7 @@ from agent_architect_lab.control_plane.reporting import (
     record_operator_handoff_snapshot,
 )
 from agent_architect_lab.control_plane.repositories import create_local_control_plane_repositories
-from agent_architect_lab.control_plane.server import create_control_plane_server
+from agent_architect_lab.control_plane.server import build_control_plane_app, create_control_plane_server
 from agent_architect_lab.evals.tasks import list_available_suites, load_default_suite, load_suite
 from agent_architect_lab.harness.compare import compare_reports
 from agent_architect_lab.harness.feedback import build_feedback_summary, build_related_feedback, list_feedback, record_feedback
@@ -108,6 +109,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_control_plane_server.add_argument("--host", default="", help="Optional bind host override.")
     run_control_plane_server.add_argument("--port", type=int, default=None, help="Optional bind port override.")
+    run_control_plane_server.add_argument(
+        "--no-worker",
+        action="store_true",
+        help="Do not start the embedded job worker. Use this when running a separate worker process.",
+    )
+    run_control_plane_worker = subparsers.add_parser(
+        "run-control-plane-worker",
+        help="Run the control-plane job worker as a standalone process.",
+    )
+    run_control_plane_worker.add_argument(
+        "--once",
+        action="store_true",
+        help="Process at most one available job and exit.",
+    )
+    run_control_plane_worker.add_argument(
+        "--idle-timeout-s",
+        type=float,
+        default=None,
+        help="Optional idle timeout before the standalone worker exits.",
+    )
     control_plane_storage_status_cmd = subparsers.add_parser(
         "control-plane-storage-status",
         help="Show control-plane storage backend status, counts, and integrity metadata.",
@@ -836,12 +857,13 @@ def cmd_run_mcp_server() -> int:
     return 0
 
 
-def cmd_run_control_plane_server(host: str, port: int | None) -> int:
+def cmd_run_control_plane_server(host: str, port: int | None, no_worker: bool) -> int:
     settings = load_settings()
     server, app = create_control_plane_server(
         settings=settings,
         host=host or settings.control_plane_host,
         port=port if port is not None else settings.control_plane_port,
+        start_worker=not no_worker,
     )
     bound_host, bound_port = server.server_address[:2]
     print(
@@ -853,6 +875,8 @@ def cmd_run_control_plane_server(host: str, port: int | None) -> int:
                 "port": bound_port,
                 "read_token_configured": bool(app.auth.read_token),
                 "mutation_token_configured": bool(app.auth.mutation_token),
+                "embedded_worker": not no_worker,
+                "worker_id": app.job_worker.worker_id,
             },
             indent=2,
         ),
@@ -864,6 +888,66 @@ def cmd_run_control_plane_server(host: str, port: int | None) -> int:
         pass
     finally:
         server.server_close()
+    return 0
+
+
+def cmd_run_control_plane_worker(once: bool, idle_timeout_s: float | None) -> int:
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    worker = build_control_plane_app(
+        settings=settings,
+        repositories=repositories,
+        managed_by_server=False,
+    ).job_worker
+    payload: dict[str, object] = {
+        "status": "running",
+        "service": "agent-architect-lab-control-plane-worker",
+        "worker_id": worker.worker_id,
+        "poll_interval_s": worker.poll_interval_s,
+        "lease_ttl_s": worker.lease_ttl_s,
+        "heartbeat_interval_s": worker.heartbeat_interval_s,
+        "mode": "once" if once else "service",
+        "idle_timeout_s": idle_timeout_s,
+    }
+    if once:
+        processed = worker.run_once()
+        payload["status"] = "completed"
+        payload["processed_jobs"] = 1 if processed else 0
+        print(json.dumps(payload, indent=2), flush=True)
+        return 0
+    print(json.dumps(payload, indent=2), flush=True)
+    try:
+        if idle_timeout_s is not None:
+            processed_jobs = worker.run_until_idle(idle_timeout_s)
+            print(
+                json.dumps(
+                    {
+                        "status": "idle_exit",
+                        "service": "agent-architect-lab-control-plane-worker",
+                        "worker_id": worker.worker_id,
+                        "processed_jobs": processed_jobs,
+                        "idle_timeout_s": idle_timeout_s,
+                    },
+                    indent=2,
+                ),
+                flush=True,
+            )
+            return 0
+        while True:
+            worker.run_once()
+            time.sleep(worker.poll_interval_s)
+    except KeyboardInterrupt:
+        print(
+            json.dumps(
+                {
+                    "status": "stopped",
+                    "service": "agent-architect-lab-control-plane-worker",
+                    "worker_id": worker.worker_id,
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
     return 0
 
 
@@ -2018,7 +2102,9 @@ def main() -> int:
     if args.command == "run-mcp-server":
         return cmd_run_mcp_server()
     if args.command == "run-control-plane-server":
-        return cmd_run_control_plane_server(args.host, args.port)
+        return cmd_run_control_plane_server(args.host, args.port, args.no_worker)
+    if args.command == "run-control-plane-worker":
+        return cmd_run_control_plane_worker(args.once, args.idle_timeout_s)
     if args.command == "control-plane-storage-status":
         return cmd_control_plane_storage_status()
     if args.command == "backup-control-plane-storage":

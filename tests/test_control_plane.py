@@ -23,6 +23,7 @@ from agent_architect_lab.cli import (
     cmd_restore_release_and_incident_ledger_backup,
     cmd_restore_control_plane_backup,
     cmd_run_evals,
+    cmd_run_control_plane_worker,
     cmd_run_planner_shadow,
     cmd_run_release_shadow,
     cmd_verify_release_and_incident_ledger_backup,
@@ -913,6 +914,80 @@ def test_control_plane_server_runs_export_jobs(monkeypatch, tmp_path: Path) -> N
         assert "release-a" in markdown
         assert audit_response.status == 200
         assert audit_payload["rows"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_control_plane_server_can_use_standalone_worker(monkeypatch, tmp_path: Path) -> None:
+    _configure_env(monkeypatch, tmp_path)
+    _seed_release_state()
+    settings = load_settings()
+    server, _app = create_control_plane_server(settings=settings, host="127.0.0.1", port=0, start_worker=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    host, port = server.server_address[:2]
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        connection.request("GET", "/health")
+        health_response = connection.getresponse()
+        health_payload = json.loads(health_response.read().decode("utf-8"))
+
+        connection.request(
+            "POST",
+            "/jobs/export-governance-summary",
+            body=json.dumps(
+                {
+                    "title": "External Worker Summary",
+                    "output": str(tmp_path / "external-worker-summary.md"),
+                    "release_limit": 5,
+                    "incident_limit": 5,
+                    "override_limit": 5,
+                }
+            ),
+            headers={
+                "Content-Type": "application/json",
+                **_request_headers(
+                    "writer-token",
+                    actor="release-manager-1",
+                    role="release-manager",
+                    idempotency_key="job-external-worker-summary-1",
+                ),
+            },
+        )
+        create_response = connection.getresponse()
+        create_payload = json.loads(create_response.read().decode("utf-8"))
+
+        worker_stdout = io.StringIO()
+        with redirect_stdout(worker_stdout):
+            worker_exit = cmd_run_control_plane_worker(True, None)
+        worker_payload = json.loads(worker_stdout.getvalue())
+
+        connection.request(
+            "GET",
+            f"/jobs/{create_payload['job_id']}",
+            headers=_request_headers(
+                "reader-token",
+                actor="release-manager-1",
+                role="release-manager",
+            ),
+        )
+        status_response = connection.getresponse()
+        status_payload = json.loads(status_response.read().decode("utf-8"))
+        connection.close()
+
+        assert health_response.status == 200
+        assert health_payload["worker"]["alive"] is False
+        assert health_payload["worker"]["managed_by_server"] is False
+        assert create_response.status == 202
+        assert create_payload["status"] == "queued"
+        assert worker_exit == 0
+        assert worker_payload["processed_jobs"] == 1
+        assert status_response.status == 200
+        assert status_payload["status"] == "succeeded"
+        assert Path(status_payload["result_payload"]["saved_to"]).exists()
     finally:
         server.shutdown()
         server.server_close()

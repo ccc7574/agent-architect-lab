@@ -133,6 +133,7 @@ class ControlPlaneApp:
                         "worker": {
                             "alive": self.job_worker.is_alive(),
                             "worker_id": self.job_worker.worker_id,
+                            "managed_by_server": self.job_worker.managed_by_server,
                             "poll_interval_s": self.job_worker.poll_interval_s,
                             "lease_ttl_s": self.job_worker.lease_ttl_s,
                             "heartbeat_interval_s": self.job_worker.heartbeat_interval_s,
@@ -1350,19 +1351,22 @@ def create_control_plane_server(
     settings: Settings | None = None,
     host: str | None = None,
     port: int | None = None,
+    start_worker: bool = True,
 ) -> tuple[ControlPlaneHTTPServer, ControlPlaneApp]:
     resolved_settings = settings or load_settings()
     repositories = create_local_control_plane_repositories(resolved_settings)
     app = build_control_plane_app(
         settings=resolved_settings,
         repositories=repositories,
+        managed_by_server=start_worker,
     )
     server = ControlPlaneHTTPServer(
         (host or resolved_settings.control_plane_host, port if port is not None else resolved_settings.control_plane_port),
         _build_handler(app),
         job_worker=app.job_worker,
     )
-    app.job_worker.start()
+    if start_worker:
+        app.job_worker.start()
     return server, app
 
 
@@ -1370,10 +1374,15 @@ def build_control_plane_app(
     *,
     settings: Settings | None = None,
     repositories: ControlPlaneRepositories | None = None,
+    managed_by_server: bool = True,
 ) -> ControlPlaneApp:
     resolved_settings = settings or load_settings()
     resolved_repositories = repositories or create_local_control_plane_repositories(resolved_settings)
-    job_worker = ControlPlaneJobWorker(settings=resolved_settings, store=resolved_repositories.jobs)
+    job_worker = ControlPlaneJobWorker(
+        settings=resolved_settings,
+        store=resolved_repositories.jobs,
+        managed_by_server=managed_by_server,
+    )
     return ControlPlaneApp(
         settings=resolved_settings,
         auth=ControlPlaneAuth(
