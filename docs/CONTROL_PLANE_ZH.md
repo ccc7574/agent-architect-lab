@@ -62,6 +62,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-dead-letter-jobs
 PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-metrics
 ```
 
+如果想看一张跨 release、incident、queue、worker 的 operator alert board：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli operator-alert-board
+```
+
 这个服务只依赖 Python 标准库，底层仍然直接复用 CLI 使用的 artifact 存储。
 
 如果要切到 SQLite 持久化后端，可以增加：
@@ -151,6 +157,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 
 - `GET /health`
 - `GET /metrics`
+- `GET /operator-alert-board?environment=production&alert_limit=20`
 - `GET /storage-status`
 - `GET /ledger-storage-status`
 - `GET /releases?limit=50`
@@ -238,6 +245,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/metrics
+```
+
+查看 operator alert board：
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/operator-alert-board?alert_limit=10
 ```
 
 查看当前进入 dead-letter 视图的失败任务：

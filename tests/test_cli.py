@@ -15,6 +15,7 @@ from agent_architect_lab.cli import (
     cmd_control_plane_dead_letter_jobs,
     cmd_control_plane_workers,
     cmd_control_plane_metrics,
+    cmd_operator_alert_board,
     cmd_environment_history,
     cmd_deploy_policy,
     cmd_deploy_release,
@@ -277,6 +278,78 @@ def test_cmd_control_plane_metrics_summarizes_jobs_workers_and_admission(monkeyp
     assert payload["jobs"]["counts_by_status"]["queued"] == 1
     assert payload["workers"]["totals"]["workers"] == 1
     assert payload["admission"]["default_max_queued_per_type"] == 7
+
+
+def test_cmd_operator_alert_board_aggregates_governance_and_control_plane_signals(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_SOAK_MINUTES", "0")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_PRODUCTION_REQUIRED_APPROVER_ROLES", "qa-owner,release-manager")
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_INCIDENT_STALE_MINUTES", "0")
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-alert", "", True, "", "release-alert")
+        cmd_approve_release("release-alert", "qa-owner", "", "qa approval")
+        cmd_open_incident(
+            "critical",
+            "unsafe production answer",
+            "incident-commander",
+            "production",
+            "release-alert",
+            "/tmp/report.json",
+            "customer escalation",
+        )
+        cmd_record_feedback(
+            "release still needs rollback proof",
+            "release-manager-1",
+            "release-manager",
+            "negative",
+            "urgent_followup",
+            "release",
+            "release-alert",
+            "",
+            "",
+            "",
+            "",
+            ["rollback"],
+            "",
+        )
+
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    job = repositories.jobs.create_job(
+        job_type="backup_control_plane_storage",
+        payload={"output": str(tmp_path / "backup.zip")},
+        requested_by_actor="ops-oncall-1",
+        requested_by_role="ops-oncall",
+        request_id="req-alert-board",
+        operation_id=None,
+        max_attempts=1,
+    )
+    claimed = repositories.jobs.claim_next_job(worker_id="worker-alert-board", lease_ttl_s=5.0)
+    assert claimed is not None
+    repositories.jobs.fail_job(job.job_id, {"code": "job_execution_failed", "message": "backup failed"})
+    repositories.workers.heartbeat_worker(
+        worker_id="worker-stale-alert",
+        managed_by_server=False,
+        poll_interval_s=0.01,
+        lease_ttl_s=5.0,
+        heartbeat_interval_s=0.01,
+    )
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_CONTROL_PLANE_WORKER_STALE_AFTER_S", "0.01")
+    time.sleep(0.05)
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_operator_alert_board([], 20, 20, 50, 20)
+    payload = json.loads(buffer.getvalue())
+
+    titles = [row["title"] for row in payload["alerts"]]
+    assert exit_code == 0
+    assert payload["metrics"]["total_alerts"] >= 3
+    assert any("Critical incidents" in title for title in titles)
+    assert any("Dead-letter jobs" in title for title in titles)
+    assert any("Worker heartbeats are stale" in title for title in titles)
 
 
 def test_cmd_register_report_registers_existing_report(monkeypatch, tmp_path: Path) -> None:

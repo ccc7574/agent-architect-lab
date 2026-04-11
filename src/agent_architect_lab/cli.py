@@ -20,6 +20,7 @@ from agent_architect_lab.control_plane.maintenance import (
     verify_control_plane_backup,
 )
 from agent_architect_lab.control_plane.jobs import build_dead_letter_summary
+from agent_architect_lab.control_plane.alerting import build_operator_alert_board_payload
 from agent_architect_lab.control_plane.metrics import build_control_plane_metrics_snapshot
 from agent_architect_lab.control_plane.reporting import (
     build_operator_handoff_payload,
@@ -152,6 +153,21 @@ def build_parser() -> argparse.ArgumentParser:
         "control-plane-metrics",
         help="Show a compact control-plane metrics snapshot for jobs, workers, and admission limits.",
     )
+    operator_alert_board_cmd = subparsers.add_parser(
+        "operator-alert-board",
+        help="Show a ranked operator alert board across governance, queue, and worker signals.",
+    )
+    operator_alert_board_cmd.add_argument(
+        "--environment",
+        dest="environments",
+        action="append",
+        default=[],
+        help="Optional environment filter. May be provided multiple times.",
+    )
+    operator_alert_board_cmd.add_argument("--release-limit", type=int, default=20, help="Maximum release rows to inspect.")
+    operator_alert_board_cmd.add_argument("--incident-limit", type=int, default=20, help="Maximum incident rows to inspect.")
+    operator_alert_board_cmd.add_argument("--override-limit", type=int, default=50, help="Maximum override rows to inspect.")
+    operator_alert_board_cmd.add_argument("--alert-limit", type=int, default=20, help="Maximum alerts to return.")
     backup_control_plane_storage_cmd = subparsers.add_parser(
         "backup-control-plane-storage",
         help="Create a point-in-time control-plane storage backup archive.",
@@ -1033,6 +1049,36 @@ def cmd_control_plane_metrics() -> int:
                 worker_alive=False,
                 worker_id="local-cli",
                 managed_by_server=False,
+            ),
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_operator_alert_board(
+    environments: list[str],
+    release_limit: int,
+    incident_limit: int,
+    override_limit: int,
+    alert_limit: int,
+) -> int:
+    settings = load_settings()
+    repositories = create_local_control_plane_repositories(settings)
+    print(
+        json.dumps(
+            build_operator_alert_board_payload(
+                settings=settings,
+                job_store=repositories.jobs,
+                worker_store=repositories.workers,
+                worker_alive=False,
+                worker_id="local-cli",
+                managed_by_server=False,
+                environments=environments or settings.environment_names,
+                release_limit=release_limit,
+                incident_limit=incident_limit,
+                override_limit=override_limit,
+                alert_limit=alert_limit,
             ),
             indent=2,
         )
@@ -2197,6 +2243,14 @@ def main() -> int:
         return cmd_control_plane_dead_letter_jobs()
     if args.command == "control-plane-metrics":
         return cmd_control_plane_metrics()
+    if args.command == "operator-alert-board":
+        return cmd_operator_alert_board(
+            args.environments,
+            args.release_limit,
+            args.incident_limit,
+            args.override_limit,
+            args.alert_limit,
+        )
     if args.command == "backup-control-plane-storage":
         return cmd_backup_control_plane_storage(args.output, args.label)
     if args.command == "verify-control-plane-backup":

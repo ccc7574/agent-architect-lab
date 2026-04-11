@@ -62,6 +62,12 @@ To inspect a compact metrics snapshot for dashboards or local debugging:
 PYTHONPATH=src python3 -m agent_architect_lab.cli control-plane-metrics
 ```
 
+To inspect a ranked operator alert board across releases, incidents, queue, and workers:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli operator-alert-board
+```
+
 The server is stdlib-only and keeps artifact storage exactly where the CLI keeps it.
 
 To switch the control plane to SQLite-backed persistence:
@@ -151,6 +157,7 @@ export AGENT_ARCHITECT_LAB_CONTROL_PLANE_ROLE_POLICIES='{
 
 - `GET /health`
 - `GET /metrics`
+- `GET /operator-alert-board?environment=production&alert_limit=20`
 - `GET /storage-status`
 - `GET /ledger-storage-status`
 - `GET /releases?limit=50`
@@ -238,6 +245,16 @@ curl \
   -H "X-Control-Plane-Actor: release-manager-1" \
   -H "X-Control-Plane-Role: release-manager" \
   http://127.0.0.1:8080/metrics
+```
+
+Inspect the ranked operator alert board:
+
+```bash
+curl \
+  -H "Authorization: Bearer reader-token" \
+  -H "X-Control-Plane-Actor: release-manager-1" \
+  -H "X-Control-Plane-Role: release-manager" \
+  http://127.0.0.1:8080/operator-alert-board?alert_limit=10
 ```
 
 Inspect failed jobs in the dead-letter operational view:

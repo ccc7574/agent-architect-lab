@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from agent_architect_lab.config import Settings, load_settings
+from agent_architect_lab.control_plane.alerting import build_operator_alert_board_payload
 from agent_architect_lab.control_plane.jobs import (
     ControlPlaneJobRepository,
     ControlPlaneJobWorker,
@@ -194,6 +195,28 @@ class ControlPlaneApp:
                 if auth_error is not None:
                     return respond(auth_error)
                 return respond(ControlPlaneResponse(200, self.job_store.summarize_jobs()))
+            if method == "GET" and path == "/operator-alert-board":
+                _authorization, auth_error = authorize("read", "read_governance")
+                if auth_error is not None:
+                    return respond(auth_error)
+                return respond(
+                    ControlPlaneResponse(
+                        200,
+                        build_operator_alert_board_payload(
+                            settings=self.settings,
+                            job_store=self.job_store,
+                            worker_store=self.worker_store,
+                            worker_alive=self.job_worker.is_alive(),
+                            worker_id=self.job_worker.worker_id,
+                            managed_by_server=self.job_worker.managed_by_server,
+                            environments=_query_environments(query, self.settings),
+                            release_limit=_query_int(query, "release_limit", default=20, minimum=1),
+                            incident_limit=_query_int(query, "incident_limit", default=20, minimum=1),
+                            override_limit=_query_int(query, "override_limit", default=50, minimum=1),
+                            alert_limit=_query_int(query, "alert_limit", default=20, minimum=1),
+                        ),
+                    )
+                )
             if method == "GET" and path == "/workers":
                 _authorization, auth_error = authorize("read", "read_jobs")
                 if auth_error is not None:
