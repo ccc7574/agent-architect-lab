@@ -11,9 +11,11 @@ The repository is intentionally small, but now includes:
 - Multiple eval suites, release gates, and harness report comparison
 - Sample skill manifests wired into runtime selection and note-backed retrieval
 - Configurable planner providers with a deterministic default and model-backed scaffold
+- Planner shadow validation artifacts for model-backed rollout discipline
 - Incident-to-eval suggestion flow for turning failures into new harness tasks
 - A report registry and manifest-aware baseline selection for release-grade eval comparisons
 - Immutable release manifests plus a release ledger with approval and promotion state transitions
+- A bounded role-handoff release command brief for QA, ops, incident command, and release management
 - Documentation aimed at a senior agent architect growth path
 
 ## Project Layout
@@ -75,6 +77,8 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli list-operator-handoffs --limit
 PYTHONPATH=src python3 -m agent_architect_lab.cli show-operator-handoff --latest
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-operator-handoff-report --latest --title "Night Shift Release Report"
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --title "Weekly Governance Summary"
+PYTHONPATH=src python3 -m agent_architect_lab.cli run-planner-shadow --suite planner_shadow --report-name planner-shadow-report.json --markdown-output ./planner-shadow.md
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-command-brief 2026-04-10-main --title "Release Command Brief"
 AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN=reader-token AGENT_ARCHITECT_LAB_CONTROL_PLANE_MUTATION_TOKEN=writer-token PYTHONPATH=src python3 -m agent_architect_lab.cli run-control-plane-server --host 127.0.0.1 --port 8080
 curl -H "Authorization: Bearer reader-token" http://127.0.0.1:8080/governance-summary
 curl -X POST http://127.0.0.1:8080/incidents/open -H "Authorization: Bearer writer-token" -H "Content-Type: application/json" -d '{"severity":"high","summary":"staging rollback triggered","owner":"incident-commander","environment":"staging"}'
@@ -148,6 +152,8 @@ More detail:
 - [docs/CONTROL_PLANE_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/CONTROL_PLANE_ZH.md)
 - [docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md)
 - [docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md)
+- [docs/RUNTIME_REALISM.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RUNTIME_REALISM.md)
+- [docs/RUNTIME_REALISM_ZH.md](/Volumes/ExtaData/newcode/agent-architect-lab/docs/RUNTIME_REALISM_ZH.md)
 
 ## Artifact Strategy
 
@@ -186,6 +192,8 @@ Use `open-incident`, `transition-incident`, `list-incidents`, and `incident-revi
 Use `export-incident-report` to render one incident into a readable Markdown artifact for postmortems or stakeholder updates.
 Use `export-incident-bundle` to package the incident, linked release state, and related handoff artifacts into one export directory.
 Use `export-governance-summary` to generate a manager-facing Markdown summary across release risk, approval backlog, incident load, and override pressure.
+Use `run-planner-shadow` to validate bounded planner behavior against task policy before trusting a model-backed planner in promotion workflows.
+Use `export-release-command-brief` to generate a deterministic role-handoff artifact spanning QA, ops, incident command, and release management.
 Use `run-control-plane-server` to expose the same governance layer over HTTP for internal dashboards or automation.
 Control-plane bind settings come from `AGENT_ARCHITECT_LAB_CONTROL_PLANE_HOST` and `AGENT_ARCHITECT_LAB_CONTROL_PLANE_PORT`, which default to `127.0.0.1` and `8080`.
 Read routes can be protected with `AGENT_ARCHITECT_LAB_CONTROL_PLANE_READ_TOKEN`.
@@ -216,6 +224,7 @@ The runtime defaults to the deterministic `heuristic` planner. A model-backed sc
 - `AGENT_ARCHITECT_LAB_PLANNER_MAX_RETRIES`
 
 The `openai_compatible` provider validates tool names and tool arguments against the local tool schemas before execution.
+`run-planner-shadow` adds a reviewable shadow artifact on top of that provider boundary so a hosted planner can be checked against bounded policy before rollout.
 
 ## Current Product Direction
 
@@ -225,6 +234,6 @@ The lab still uses a deterministic planner by default, which keeps it runnable w
 - richer skill selection and policy routing
 - task types with stronger graders
 - queued/background control-plane work and stronger role segmentation
-- model-backed validation and bounded multi-agent orchestration
+- planner shadow validation and bounded role-based orchestration
 
 Those extensions are outlined in the docs.

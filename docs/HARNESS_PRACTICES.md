@@ -43,7 +43,18 @@ Typed graders make failures explainable and composable.
 
 Traces, checkpoints, and reports should be saved in predictable locations with stable schemas. Auditability is part of harness design.
 
-### 6. Organize by capability track
+### 6. Add planner shadow validation before rollout
+
+Hosted planners should not jump directly from "provider integration works" to "release is safe".
+
+Use a bounded shadow suite to check:
+
+- first-step action type
+- allowed versus blocked tools
+- approval-style answers for destructive requests
+- heuristic-versus-candidate drift
+
+### 7. Organize by capability track
 
 Examples:
 
@@ -72,3 +83,4 @@ They also define:
 - the exact gate that blocks a release when safety degrades
 - how a real incident becomes a permanent eval task in the benchmark
 - how a rollout review explains blockers, warnings, and required eval backfills in one operator-facing output
+- how planner shadow artifacts become part of release review

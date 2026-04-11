@@ -280,6 +280,12 @@ Render a manager-facing weekly status report using handoff history plus the curr
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-weekly-status --title "Weekly Release Status"
 ```
 
+Render a bounded role-handoff release command brief:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-command-brief release-a --title "Release Command Brief"
+```
+
 Render an operator-facing release runbook before a rollout window:
 
 ```bash
@@ -385,6 +391,7 @@ The incident ledger now also records who linked the follow-up eval artifact and 
 `list-operator-handoffs` provides a compact shift-history index, and `show-operator-handoff --latest` reloads the latest saved handoff without requiring operators to inspect the artifact directory manually.
 `export-operator-handoff-report` renders a saved handoff snapshot into Markdown so the same operator state can be shared as a readable shift-transfer or incident-review document.
 `export-governance-summary` compresses release risk, approval backlog, incident load, active overrides, and recent releases into one manager-facing Markdown summary.
+`export-release-command-brief` turns one release into a fixed QA -> Ops -> Incident -> Release Manager handoff artifact so promotion ownership stays explicit.
 
 ## Why This Matters
 

@@ -22,6 +22,7 @@ from agent_architect_lab.cli import (
     cmd_export_incident_report,
     cmd_export_incident_bundle,
     cmd_export_governance_summary,
+    cmd_export_release_command_brief,
     cmd_export_release_runbook,
     cmd_export_weekly_status,
     cmd_grant_release_override,
@@ -44,6 +45,7 @@ from agent_architect_lab.cli import (
     cmd_rollback_release,
     cmd_release_status,
     cmd_run_evals,
+    cmd_run_planner_shadow,
     cmd_run_release_shadow,
     cmd_show_operator_handoff,
     cmd_transition_incident,
@@ -425,6 +427,75 @@ def test_cmd_export_release_runbook_writes_markdown(monkeypatch, tmp_path: Path)
     assert "change review exception" in markdown
     assert "deploy-release release-a --environment staging" in markdown
     assert "rollback-release release-a --environment production" in markdown
+
+
+def test_cmd_run_planner_shadow_writes_policy_report(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_run_planner_shadow(
+            "planner_shadow",
+            "planner-shadow.json",
+            [],
+            [],
+            str(tmp_path / "planner-shadow.md"),
+            "Planner Shadow",
+        )
+    payload = json.loads(buffer.getvalue())
+
+    assert exit_code == 0
+    assert payload["suite_name"] == "planner_shadow"
+    assert payload["all_passed"] is True
+    assert payload["policy_pass_rate"] == 1.0
+    assert Path(payload["report_path"]).exists()
+    assert Path(payload["markdown_path"]).exists()
+
+
+def test_cmd_export_release_command_brief_writes_markdown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(tmp_path / "artifacts"))
+
+    with redirect_stdout(io.StringIO()):
+        cmd_run_evals("safety-baseline.json", "safety", "baseline", "approved-safety")
+        cmd_run_release_shadow(["safety"], "release-brief", "", True, "", "release-brief")
+        cmd_grant_release_override(
+            "release-brief",
+            "production",
+            "environment_frozen",
+            "incident-commander",
+            "emergency waiver",
+            "",
+        )
+        cmd_open_incident(
+            "high",
+            "planner drift on staging",
+            "incident-commander",
+            "staging",
+            "release-brief",
+            "",
+            "contain before promotion",
+        )
+
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        exit_code = cmd_export_release_command_brief(
+            "release-brief",
+            [],
+            5,
+            10,
+            "",
+            "Release Brief",
+        )
+    payload = json.loads(buffer.getvalue())
+    markdown = Path(payload["output_path"]).read_text(encoding="utf-8")
+
+    assert exit_code == 1
+    assert payload["pattern"] == "bounded_role_handoff"
+    assert payload["recommended_action"] == "hold_release"
+    assert len(payload["roles"]) == 4
+    assert "qa-owner" in markdown
+    assert "release-manager" in markdown
+    assert "hold_release" in markdown
 
 
 def test_cmd_release_and_incident_ledger_backup_round_trip(monkeypatch, tmp_path: Path) -> None:

@@ -91,11 +91,11 @@ JSONL dataset
 ## Current Gaps
 
 - The planner is heuristic, not model-backed.
-- The model-backed provider scaffold is present but not exercised in local tests.
+- The model-backed provider scaffold is present and now has a bounded shadow-validation harness, but the default end-to-end suite still stays deterministic.
 - Skill routing is intentionally lightweight and mostly note-backed.
 - Notes retrieval is still local and lexical rather than embedding-based.
 - There is no scheduler, queue, or operator workflow layer.
-- There is no true multi-agent orchestration or role ownership model in code yet.
+- There is now a bounded role-handoff release orchestration example, but not a general distributed multi-agent worker plane.
 
 ## OpenClaw-Style Product Target
 
@@ -121,6 +121,6 @@ Offline harnesses, online shadow runs, dashboards, alerts, rollback, incident re
 1. Add a real `PlannerProvider` implementation backed by an API model.
 2. Extend skill routing from note-backed heuristics into tool and policy selection.
 3. Add a review loop pattern: planner -> executor -> evaluator.
-4. Add role-based worker orchestration for bounded subtasks.
+4. Expand the bounded role orchestration example into broader worker patterns once the release/governance path is fully stable.
 5. Add artifact lineage so a result links to prompts, tools, notes, and checkpoints.
 6. Add online shadow runs and incident feedback into the harness plane.

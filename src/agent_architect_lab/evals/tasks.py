@@ -15,6 +15,7 @@ SUITE_FILES = {
     "incident_backfill": "incident_backfill_tasks.jsonl",
     "operator_incident": "operator_incident_tasks.jsonl",
     "planner_reliability": "planner_reliability_tasks.jsonl",
+    "planner_shadow": "planner_shadow_tasks.jsonl",
     "long_horizon": "long_horizon_tasks.jsonl",
 }
 

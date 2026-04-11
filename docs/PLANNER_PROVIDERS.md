@@ -41,4 +41,12 @@ This means:
 
 ## Current Constraint
 
-The `openai_compatible` provider is intentionally lightweight and is not exercised by default local tests. It exists to keep the runtime boundary clean so a real hosted planner can be introduced without rewriting execution and harness code.
+The `openai_compatible` provider is intentionally lightweight and the default end-to-end suite still stays deterministic.
+
+This repository now adds `run-planner-shadow` so a hosted planner can be evaluated against:
+
+- task-level allowed and blocked tools
+- expected action types
+- heuristic baseline drift
+
+That keeps the provider boundary clean while still giving release reviewers a concrete shadow artifact before rollout.

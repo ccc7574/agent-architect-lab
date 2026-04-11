@@ -235,6 +235,12 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli export-governance-summary --ti
 PYTHONPATH=src python3 -m agent_architect_lab.cli export-weekly-status --title "Weekly Release Status"
 ```
 
+导出一份固定角色交接边界的 release command brief：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli export-release-command-brief release-a --title "Release Command Brief"
+```
+
 在正式 rollout 前导出一份面向值班人员的 release runbook：
 
 ```bash
@@ -543,6 +549,7 @@ incident ledger 现在还会显式记录是谁在什么时候绑定了这个 fol
 `list-operator-handoffs` 提供交接历史索引，`show-operator-handoff --latest` 可以直接读取最新留档，不需要人工翻 artifacts 目录。
 `export-operator-handoff-report` 会把留档过的交接快照渲染成 Markdown 报告，适合直接发给下一班值班、事故复盘或周报同步。
 `export-governance-summary` 会把 release risk、approval backlog、incident 负载、override 压力和最近 release 汇总成一份管理层可读的 Markdown 摘要。
+`export-release-command-brief` 会把单个 release 组织成固定的 QA -> Ops -> Incident -> Release Manager 交接产物，让 promotion ownership 更明确。
 
 ## 推荐运维流程
 

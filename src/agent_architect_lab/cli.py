@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from re import sub
 
+from agent_architect_lab.agent.orchestration import export_release_command_brief
 from agent_architect_lab.agent.patterns import PATTERNS, recommend_pattern
 from agent_architect_lab.agent.runtime import AgentRuntime
 from agent_architect_lab.config import load_settings
@@ -63,12 +64,17 @@ from agent_architect_lab.harness.ledger_maintenance import (
     restore_release_and_incident_ledger_backup,
     verify_release_and_incident_ledger_backup,
 )
+from agent_architect_lab.harness.planner_shadow import (
+    export_planner_shadow_markdown,
+    run_planner_shadow_suite,
+)
 from agent_architect_lab.harness.promotion import default_gate_config_for_suite, evaluate_promotion
 from agent_architect_lab.harness.release import run_release_shadow_review
 from agent_architect_lab.harness.reporting import HarnessReport, register_existing_report, save_report_and_record
 from agent_architect_lab.harness.rollout import build_rollout_review
 from agent_architect_lab.harness.runner import run_suite
 from agent_architect_lab.harness.shadow import run_shadow_suite
+from agent_architect_lab.llm.factory import create_planner_provider
 from agent_architect_lab.mcp.server import serve as serve_mcp_server
 from agent_architect_lab.models import Task, utc_now_iso
 from agent_architect_lab.skills.catalog import load_skills, select_skills
@@ -241,6 +247,16 @@ def build_parser() -> argparse.ArgumentParser:
     release.add_argument("--suite-aware-defaults", action="store_true", help="Use built-in suite gate defaults for candidate reports.")
     release.add_argument("--baseline-manifest", default="", help="Optional JSON manifest mapping suites to explicit baseline report paths.")
     release.add_argument("--release-name", default="", help="Optional immutable release name to record in the release ledger.")
+    planner_shadow = subparsers.add_parser(
+        "run-planner-shadow",
+        help="Validate first-step planner decisions against task policy plus a heuristic baseline.",
+    )
+    planner_shadow.add_argument("--suite", default="planner_shadow", choices=list_available_suites(), help="Suite to evaluate.")
+    planner_shadow.add_argument("--report-name", default="planner-shadow-report.json", help="Planner shadow JSON artifact name.")
+    planner_shadow.add_argument("--allowed-tool", action="append", default=[], help="Optional globally allowed tool. Repeat for multiple values.")
+    planner_shadow.add_argument("--blocked-tool", action="append", default=[], help="Optional globally blocked tool. Repeat for multiple values.")
+    planner_shadow.add_argument("--markdown-output", default="", help="Optional Markdown summary path.")
+    planner_shadow.add_argument("--title", default="", help="Optional Markdown title override.")
 
     register = subparsers.add_parser("register-report", help="Register an existing harness report for baseline selection and audit trails.")
     register.add_argument("report", help="Report path to register.")
@@ -389,6 +405,16 @@ def build_parser() -> argparse.ArgumentParser:
     export_release_runbook_cmd.add_argument("--incident-limit", type=int, default=20, help="Maximum linked incidents to include.")
     export_release_runbook_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/reports/release-runbook-<release>.md.")
     export_release_runbook_cmd.add_argument("--title", default="", help="Optional report title override.")
+    export_release_command_brief_cmd = subparsers.add_parser(
+        "export-release-command-brief",
+        help="Render a bounded role-handoff brief for QA, ops, incident command, and release management.",
+    )
+    export_release_command_brief_cmd.add_argument("release_name", help="Immutable release name.")
+    export_release_command_brief_cmd.add_argument("--environment", dest="environments", action="append", default=[], help="Environment to include. Repeat to override the configured default environment set.")
+    export_release_command_brief_cmd.add_argument("--history-limit", type=int, default=5, help="Maximum lineage entries to include per environment.")
+    export_release_command_brief_cmd.add_argument("--incident-limit", type=int, default=10, help="Maximum linked incidents to include.")
+    export_release_command_brief_cmd.add_argument("--output", default="", help="Optional output Markdown path. Defaults to artifacts/reports/release-command-<release>.md.")
+    export_release_command_brief_cmd.add_argument("--title", default="", help="Optional report title override.")
 
     rollout_matrix_cmd = subparsers.add_parser("rollout-matrix", help="Show a multi-environment rollout view, optionally with readiness for a specific release.")
     rollout_matrix_cmd.add_argument("release_name", nargs="?", default="", help="Optional immutable release name to evaluate across environments.")
@@ -959,6 +985,38 @@ def cmd_run_release_shadow(
         payload["release_record"] = record.to_dict()
     print(json.dumps(payload, indent=2))
     return 0 if result.passed else 1
+
+
+def cmd_run_planner_shadow(
+    suite_name: str,
+    report_name: str,
+    allowed_tools: list[str],
+    blocked_tools: list[str],
+    markdown_output: str,
+    title: str,
+) -> int:
+    settings = load_settings()
+    provider = create_planner_provider(settings)
+    report = run_planner_shadow_suite(
+        suite_name,
+        provider,
+        allowed_tools=allowed_tools,
+        blocked_tools=blocked_tools,
+        settings=settings,
+    )
+    report_path = settings.reports_dir / report_name
+    report.save(report_path)
+    payload = report.to_dict()
+    payload["report_path"] = str(report_path)
+    if markdown_output:
+        markdown_path = export_planner_shadow_markdown(
+            report,
+            output=markdown_output,
+            title=title or "Planner Shadow Report",
+        )
+        payload["markdown_path"] = str(markdown_path)
+    print(json.dumps(payload, indent=2))
+    return 0 if report.all_passed else 1
 
 
 def cmd_register_report(report: str, report_kind: str, report_label: str) -> int:
@@ -1783,6 +1841,28 @@ def cmd_export_release_runbook(
     return 0
 
 
+def cmd_export_release_command_brief(
+    release_name: str,
+    environments: list[str],
+    history_limit: int,
+    incident_limit: int,
+    output: str,
+    title: str,
+) -> int:
+    brief, output_path = export_release_command_brief(
+        release_name,
+        environments=environments or None,
+        history_limit=history_limit,
+        incident_limit=incident_limit,
+        output=output,
+        title=title or "Release Command Brief",
+    )
+    payload = brief.to_dict()
+    payload["output_path"] = str(output_path)
+    print(json.dumps(payload, indent=2))
+    return 0 if brief.recommended_action in {"promote", "promote_with_review"} else 1
+
+
 def cmd_rollout_matrix(release_name: str, environments: list[str]) -> int:
     settings = load_settings()
     matrix = get_rollout_matrix(
@@ -1921,6 +2001,15 @@ def main() -> int:
             args.baseline_manifest,
             args.release_name,
         )
+    if args.command == "run-planner-shadow":
+        return cmd_run_planner_shadow(
+            args.suite,
+            args.report_name,
+            args.allowed_tool,
+            args.blocked_tool,
+            args.markdown_output,
+            args.title,
+        )
     if args.command == "register-report":
         return cmd_register_report(args.report, args.report_kind, args.report_label)
     if args.command == "release-status":
@@ -2000,6 +2089,15 @@ def main() -> int:
         )
     if args.command == "export-release-runbook":
         return cmd_export_release_runbook(
+            args.release_name,
+            args.environments,
+            args.history_limit,
+            args.incident_limit,
+            args.output,
+            args.title,
+        )
+    if args.command == "export-release-command-brief":
+        return cmd_export_release_command_brief(
             args.release_name,
             args.environments,
             args.history_limit,
