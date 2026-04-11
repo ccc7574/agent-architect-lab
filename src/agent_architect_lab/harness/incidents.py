@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from agent_architect_lab.harness.feedback import FeedbackLedger, FeedbackRecord
 from agent_architect_lab.harness.reporting import HarnessReport
 from agent_architect_lab.models import utc_now_iso
 
@@ -35,6 +36,53 @@ TRACK_TO_DATASET = {
     "skills": "incident_backfill_tasks.jsonl",
     "tool-use": "incident_backfill_tasks.jsonl",
     "workflow-shape": "incident_backfill_tasks.jsonl",
+}
+
+TRACK_PRIORITY_WEIGHTS = {
+    "safety": 60,
+    "approvals": 52,
+    "retrieval": 44,
+    "planner-reliability": 42,
+    "tool-use": 40,
+    "workflow-shape": 36,
+    "skills": 34,
+    "incident-followup": 30,
+}
+
+FAILURE_PRIORITY_WEIGHTS = {
+    "safety_violation": 18,
+    "approval_signal_missing": 15,
+    "retrieval_miss": 12,
+    "mcp_unavailable": 12,
+    "planner_timeout": 10,
+    "planner_http_error": 8,
+    "planner_network_error": 8,
+    "tool_timeout": 8,
+    "tool_execution_error": 8,
+    "trace_shape_mismatch": 6,
+    "skill_routing_mismatch": 6,
+}
+
+SENTIMENT_PRIORITY_BONUS = {
+    "negative": 14,
+    "neutral": 4,
+    "positive": -8,
+}
+
+ACTIONABILITY_PRIORITY_BONUS = {
+    "observe": 0,
+    "followup_required": 12,
+    "urgent_followup": 24,
+}
+
+LABEL_PRIORITY_HINTS = {
+    "safety": {"safety"},
+    "approvals": {"approval", "approvals", "rollback"},
+    "retrieval": {"retrieval", "mcp"},
+    "planner-reliability": {"planner"},
+    "tool-use": {"tool"},
+    "workflow-shape": {"workflow", "trace"},
+    "skills": {"skill", "routing"},
 }
 
 
@@ -354,13 +402,38 @@ class IncidentEvalSuggestion:
     source_run_id: str
     suggested_dataset: str
     template_notes: list[str]
+    priority_score: int = 0
+    priority_reasons: list[str] = field(default_factory=list)
+    matched_feedback_count: int = 0
+
+    def serialized_metadata(self) -> dict:
+        return {
+            **self.metadata,
+            "priority_score": self.priority_score,
+            "priority_reasons": self.priority_reasons,
+            "matched_feedback_count": self.matched_feedback_count,
+        }
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "goal": self.goal,
+            "grader": self.grader,
+            "metadata": self.serialized_metadata(),
+            "source_run_id": self.source_run_id,
+            "suggested_dataset": self.suggested_dataset,
+            "template_notes": self.template_notes,
+            "priority_score": self.priority_score,
+            "priority_reasons": self.priority_reasons,
+            "matched_feedback_count": self.matched_feedback_count,
+        }
 
     def to_jsonl_line(self) -> str:
         payload = {
             "id": self.task_id,
             "goal": self.goal,
             "grader": self.grader,
-            "metadata": self.metadata,
+            "metadata": self.serialized_metadata(),
         }
         return json.dumps(payload, ensure_ascii=True)
 
@@ -386,8 +459,99 @@ def _template_notes_for_failure(failure_type: str) -> list[str]:
     return notes
 
 
-def suggest_incident_evals(report: HarnessReport) -> list[IncidentEvalSuggestion]:
+def _normalize_optional_path(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return str(Path(value).expanduser().resolve())
+
+
+def _base_priority_score(track: str, failure_type: str) -> tuple[int, list[str]]:
+    score = TRACK_PRIORITY_WEIGHTS.get(track, TRACK_PRIORITY_WEIGHTS["incident-followup"])
+    reasons = [f"base priority for {track} failures"]
+    failure_bonus = FAILURE_PRIORITY_WEIGHTS.get(failure_type, 0)
+    if failure_bonus:
+        score += failure_bonus
+        reasons.append(f"failure type '{failure_type}' raises urgency")
+    return score, reasons
+
+
+def _priority_label_matches(track: str, failure_type: str, labels: list[str]) -> list[str]:
+    expected = set(LABEL_PRIORITY_HINTS.get(track, set()))
+    if failure_type.startswith("planner_"):
+        expected.add("planner")
+    if failure_type.startswith("tool_"):
+        expected.add("tool")
+    if failure_type.startswith("approval_"):
+        expected.add("approval")
+    if failure_type.startswith("trace_"):
+        expected.add("trace")
+    if failure_type.startswith("skill_"):
+        expected.add("skill")
+    if failure_type.startswith("retrieval_") or failure_type.startswith("mcp_"):
+        expected.add("retrieval")
+    return sorted(label for label in labels if label in expected)
+
+
+def _score_feedback_match(
+    record: FeedbackRecord,
+    *,
+    run_id: str,
+    track: str,
+    failure_type: str,
+    release_name: str | None,
+    incident_id: str | None,
+    report_path: str | None,
+) -> tuple[bool, int, list[str]]:
+    matched = False
+    score = 0
+    reasons: list[str] = []
+    if run_id and record.run_id == run_id:
+        matched = True
+        score += 30
+        reasons.append("direct human feedback matched this failed run")
+    if incident_id and record.incident_id == incident_id:
+        matched = True
+        score += 20
+        reasons.append("incident-linked human feedback matched this backfill context")
+    if report_path and _normalize_optional_path(record.report_path) == report_path:
+        matched = True
+        score += 12
+        reasons.append("report review feedback matched this candidate report")
+    if release_name and record.release_name == release_name:
+        matched = True
+        score += 8
+        reasons.append("release review feedback matched this rollout")
+    if not matched:
+        return False, 0, []
+
+    sentiment_bonus = SENTIMENT_PRIORITY_BONUS.get(record.sentiment, 0)
+    if sentiment_bonus:
+        score += sentiment_bonus
+        reasons.append(f"{record.sentiment} reviewer sentiment changed priority")
+
+    actionability_bonus = ACTIONABILITY_PRIORITY_BONUS.get(record.actionability, 0)
+    if actionability_bonus:
+        score += actionability_bonus
+        reasons.append(f"{record.actionability} feedback requires stronger follow-up")
+
+    aligned_labels = _priority_label_matches(track, failure_type, record.labels)
+    if aligned_labels:
+        score += 6 * len(aligned_labels)
+        reasons.append(f"feedback labels aligned with this failure: {', '.join(aligned_labels)}")
+    return True, score, reasons
+
+
+def suggest_incident_evals(
+    report: HarnessReport,
+    *,
+    feedback_ledger_path: Path | None = None,
+    release_name: str | None = None,
+    incident_id: str | None = None,
+    report_path: str | None = None,
+) -> list[IncidentEvalSuggestion]:
     suggestions: list[IncidentEvalSuggestion] = []
+    normalized_report_path = _normalize_optional_path(report_path)
+    feedback_records = FeedbackLedger.load(feedback_ledger_path).records if feedback_ledger_path is not None else []
     for result in report.results:
         if result.success:
             continue
@@ -398,6 +562,23 @@ def suggest_incident_evals(report: HarnessReport) -> list[IncidentEvalSuggestion
         grader = {"type": "all", "checks": [{"type": "status", "equals": result.status}]}
         if result.failure_type:
             grader["checks"].append({"type": "failure_type", "equals": result.failure_type})
+        priority_score, priority_reasons = _base_priority_score(track, failure_type)
+        matched_feedback_count = 0
+        for feedback_record in feedback_records:
+            matched, feedback_score, feedback_reasons = _score_feedback_match(
+                feedback_record,
+                run_id=result.run_id,
+                track=track,
+                failure_type=failure_type,
+                release_name=release_name,
+                incident_id=incident_id,
+                report_path=normalized_report_path,
+            )
+            if not matched:
+                continue
+            matched_feedback_count += 1
+            priority_score += feedback_score
+            priority_reasons.extend(feedback_reasons)
         suggestions.append(
             IncidentEvalSuggestion(
                 task_id=task_id,
@@ -413,8 +594,19 @@ def suggest_incident_evals(report: HarnessReport) -> list[IncidentEvalSuggestion
                 source_run_id=result.run_id,
                 suggested_dataset=suggested_dataset,
                 template_notes=_template_notes_for_failure(failure_type),
+                priority_score=priority_score,
+                priority_reasons=list(dict.fromkeys(priority_reasons)),
+                matched_feedback_count=matched_feedback_count,
             )
         )
+    suggestions.sort(
+        key=lambda suggestion: (
+            -suggestion.priority_score,
+            -suggestion.matched_feedback_count,
+            suggestion.suggested_dataset,
+            suggestion.task_id,
+        )
+    )
     return suggestions
 
 

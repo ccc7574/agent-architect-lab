@@ -10,6 +10,7 @@ Should this candidate build be promoted, and if not, what exactly needs to happe
 - suite-aware release gates
 - blocker and warning explanations
 - candidate incident-to-eval backfill suggestions
+- feedback-aware prioritization of those backfill suggestions
 
 ## Intended Use
 
@@ -27,6 +28,7 @@ A rollout review includes:
 - blocker explanations
 - warning explanations
 - policy findings grouped by release concern
+- related human feedback and a compact feedback summary
 - suggested eval backfills for failed candidate results
 
 ## Why This Matters
@@ -37,4 +39,5 @@ They explain:
 
 - what regressed
 - why that regression blocks release
-- and which eval tasks should be added so the same issue does not recur silently
+- which human feedback increased follow-up urgency
+- and which eval tasks should be added first so the same issue does not recur silently

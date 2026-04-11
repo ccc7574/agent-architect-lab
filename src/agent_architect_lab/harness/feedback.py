@@ -276,10 +276,12 @@ def build_related_feedback(
     release_name: str | None = None,
     incident_ids: list[str] | None = None,
     run_ids: list[str] | None = None,
+    report_paths: list[str] | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     incident_set = {item for item in (incident_ids or []) if item}
     run_set = {item for item in (run_ids or []) if item}
+    report_set = {_normalize_path(item) for item in (report_paths or []) if _normalize_path(item)}
     ledger = FeedbackLedger.load(ledger_path)
     rows: list[FeedbackRecord] = []
     for record in ledger.records:
@@ -290,6 +292,9 @@ def build_related_feedback(
             rows.append(record)
             continue
         if run_set and record.run_id in run_set:
+            rows.append(record)
+            continue
+        if report_set and _normalize_path(record.report_path) in report_set:
             rows.append(record)
             continue
     deduped: list[dict[str, Any]] = []
@@ -327,3 +332,9 @@ def _normalize_target_kind(value: str) -> str:
 
 def _normalize_labels(values: list[str]) -> list[str]:
     return list(dict.fromkeys(item.strip().lower() for item in values if item.strip()))
+
+
+def _normalize_path(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return str(Path(value).expanduser().resolve())

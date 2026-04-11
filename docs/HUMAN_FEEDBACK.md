@@ -40,6 +40,15 @@ Summarize feedback:
 PYTHONPATH=src python3 -m agent_architect_lab.cli feedback-summary --release-name 2026-04-10-main
 ```
 
+Feedback also now feeds back into incident backfill ranking:
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli suggest-incident-evals \
+  artifacts/reports/candidate.json
+```
+
+`suggest-incident-evals` and `rollout-review` now raise priority for failed runs that match negative, urgent, or label-aligned human feedback.
+
 ## Control Plane
 
 Read routes:
@@ -84,3 +93,4 @@ The repo already tracked approvals, incidents, run traces, and release artifacts
 - which release, incident, report, run, or artifact triggered the feedback
 
 That lets governance summary, weekly status, release runbooks, release command briefs, and incident bundles carry explicit human signals instead of only system-generated state.
+It also means the incident backfill queue is no longer ranked only by failure type; explicit reviewer pressure now pushes the most urgent eval gaps to the top.

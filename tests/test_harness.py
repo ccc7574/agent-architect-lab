@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_architect_lab.config import load_settings
 from agent_architect_lab.harness.compare import compare_reports
+from agent_architect_lab.harness.feedback import default_feedback_ledger_path, record_feedback
 from agent_architect_lab.harness.gates import GateConfig, check_report_gates
 from agent_architect_lab.harness.incidents import (
     IncidentEvent,
@@ -152,13 +153,47 @@ def test_rollout_review_explains_blockers_and_suggests_backfill(tmp_path: Path) 
     baseline = _report(tmp_path / "baseline.json", success=True, score=1.0)
     candidate = _report(tmp_path / "candidate.json", success=False, score=0.5, failure_type="planner_timeout")
     candidate.results[0].metadata["goal"] = "demo planner timeout"
+    candidate.save(tmp_path / "candidate.json")
+    ledger_path = default_feedback_ledger_path(tmp_path / "feedback")
+    record_feedback(
+        actor="qa-owner",
+        role="qa",
+        sentiment="negative",
+        actionability="urgent_followup",
+        target_kind="run",
+        summary="planner timeout blocks rollout confidence",
+        ledger_path=ledger_path,
+        run_id="run-1",
+        labels=["planner"],
+    )
+    record_feedback(
+        actor="release-manager",
+        role="release-manager",
+        sentiment="neutral",
+        actionability="observe",
+        target_kind="report",
+        summary="candidate report still needs planner review",
+        ledger_path=ledger_path,
+        report_path=str((tmp_path / "candidate.json").resolve()),
+        labels=["planner"],
+    )
 
-    review = build_rollout_review(baseline, candidate, suite_aware_defaults=True)
+    review = build_rollout_review(
+        baseline,
+        candidate,
+        suite_aware_defaults=True,
+        feedback_ledger_path=ledger_path,
+        candidate_report_path=tmp_path / "candidate.json",
+    )
 
     assert review.promotion.passed is False
     assert any("passes fewer tasks" in explanation for explanation in review.blocker_explanations)
     assert review.candidate_incident_suggestions
     assert review.policy_findings
+    assert review.feedback_summary["matched_feedback_count"] == 2
+    assert review.feedback_summary["urgent_feedback_count"] == 1
+    assert len(review.related_feedback) == 2
+    assert review.candidate_incident_suggestions[0].matched_feedback_count == 2
     assert review.summary == "Candidate should be held pending blocker resolution."
 
 

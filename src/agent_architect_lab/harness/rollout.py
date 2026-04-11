@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
+from agent_architect_lab.harness.feedback import build_related_feedback
 from agent_architect_lab.harness.incidents import IncidentEvalSuggestion, suggest_incident_evals
 from agent_architect_lab.harness.policies import PolicyFinding, summarize_policy_findings
 from agent_architect_lab.harness.promotion import PromotionResult, evaluate_promotion
@@ -36,11 +40,35 @@ def _explain_issue(issue: str) -> str:
     return issue
 
 
+def _summarize_related_feedback(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    sentiment_counts = Counter(str(row.get("sentiment", "")) for row in rows if row.get("sentiment"))
+    actionability_counts = Counter(str(row.get("actionability", "")) for row in rows if row.get("actionability"))
+    label_counts = Counter(
+        str(label)
+        for row in rows
+        for label in row.get("labels", [])
+        if isinstance(label, str) and label
+    )
+    return {
+        "matched_feedback_count": len(rows),
+        "negative_feedback_count": sentiment_counts.get("negative", 0),
+        "positive_feedback_count": sentiment_counts.get("positive", 0),
+        "urgent_feedback_count": actionability_counts.get("urgent_followup", 0),
+        "followup_feedback_count": actionability_counts.get("followup_required", 0),
+        "top_labels": [
+            {"label": label, "count": count}
+            for label, count in sorted(label_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ],
+    }
+
+
 @dataclass(slots=True)
 class RolloutReview:
     promotion: PromotionResult
     candidate_incident_suggestions: list[IncidentEvalSuggestion]
     policy_findings: list[PolicyFinding]
+    related_feedback: list[dict[str, Any]] = field(default_factory=list)
+    feedback_summary: dict[str, Any] = field(default_factory=dict)
     blocker_explanations: list[str] = field(default_factory=list)
     warning_explanations: list[str] = field(default_factory=list)
     summary: str = ""
@@ -52,18 +80,9 @@ class RolloutReview:
             "blocker_explanations": self.blocker_explanations,
             "warning_explanations": self.warning_explanations,
             "policy_findings": [finding.to_dict() for finding in self.policy_findings],
-            "candidate_incident_suggestions": [
-                {
-                    "task_id": suggestion.task_id,
-                    "goal": suggestion.goal,
-                    "grader": suggestion.grader,
-                    "metadata": suggestion.metadata,
-                    "source_run_id": suggestion.source_run_id,
-                    "suggested_dataset": suggestion.suggested_dataset,
-                    "template_notes": suggestion.template_notes,
-                }
-                for suggestion in self.candidate_incident_suggestions
-            ],
+            "feedback_summary": self.feedback_summary,
+            "related_feedback": self.related_feedback,
+            "candidate_incident_suggestions": [suggestion.to_dict() for suggestion in self.candidate_incident_suggestions],
         }
 
 
@@ -73,6 +92,10 @@ def build_rollout_review(
     *,
     allow_suite_mismatch: bool = False,
     suite_aware_defaults: bool = False,
+    feedback_ledger_path: Path | None = None,
+    candidate_report_path: Path | None = None,
+    release_name: str | None = None,
+    incident_id: str | None = None,
 ) -> RolloutReview:
     promotion = evaluate_promotion(
         baseline,
@@ -82,7 +105,25 @@ def build_rollout_review(
     )
     blocker_explanations = [_explain_issue(issue) for issue in promotion.blockers]
     warning_explanations = [_explain_issue(issue) for issue in promotion.warnings]
-    candidate_incident_suggestions = suggest_incident_evals(candidate)
+    normalized_report_path = str(candidate_report_path.resolve()) if candidate_report_path is not None else None
+    related_feedback: list[dict[str, Any]] = []
+    if feedback_ledger_path is not None:
+        related_feedback = build_related_feedback(
+            ledger_path=feedback_ledger_path,
+            release_name=release_name,
+            incident_ids=[incident_id] if incident_id else None,
+            run_ids=[result.run_id for result in candidate.results if result.run_id],
+            report_paths=[normalized_report_path] if normalized_report_path else None,
+            limit=20,
+        )
+    feedback_summary = _summarize_related_feedback(related_feedback)
+    candidate_incident_suggestions = suggest_incident_evals(
+        candidate,
+        feedback_ledger_path=feedback_ledger_path,
+        release_name=release_name,
+        incident_id=incident_id,
+        report_path=normalized_report_path,
+    )
     policy_findings = summarize_policy_findings(candidate, promotion.comparison)
     if promotion.passed:
         summary = "Candidate is promotable."
@@ -94,6 +135,8 @@ def build_rollout_review(
         promotion=promotion,
         candidate_incident_suggestions=candidate_incident_suggestions,
         policy_findings=policy_findings,
+        related_feedback=related_feedback,
+        feedback_summary=feedback_summary,
         blocker_explanations=blocker_explanations,
         warning_explanations=warning_explanations,
         summary=summary,

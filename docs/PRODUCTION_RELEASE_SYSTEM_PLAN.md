@@ -27,8 +27,8 @@ This document reviews the current `agent-architect-lab` repository as if it were
 3. Runtime realism has moved beyond scaffolding, but it is still not a full hosted release path.
    Planner shadow validates first-step planner behavior and bounded role handoff artifacts model release command ownership, but default execution is still heuristic-first and the multi-role pattern is still artifact-level rather than worker-execution-level.
 
-4. The biggest remaining gaps are now in retrieval depth, deeper feedback learning, and platform deployment shape.
-   The repo now records human feedback as a first-class governance signal, but retrieval is still lightweight lexical search over local notes, feedback is not yet fed into automated eval generation or ranking, and the system still does not model a distributed control plane or true service tenancy.
+4. The biggest remaining gaps are now in retrieval depth and platform deployment shape, while feedback learning has moved from passive capture into prioritization.
+   The repo now records human feedback as a first-class governance signal and feeds it into incident-eval ranking and rollout review context. Retrieval is still lightweight lexical search over local notes, and the system still does not model a distributed control plane or true service tenancy.
 
 ## Completed Milestones
 
@@ -71,7 +71,7 @@ Goal: turn the hosted planner and multi-role runtime into something closer to a 
 Goal: make the repo better reflect the retrieval and human-learning expectations placed on senior AI architects.
 
 - Extend retrieval from lexical note search into stronger provenance-aware knowledge routing
-- Feed the new human feedback ledger into eval generation, ranking, and regression prioritization
+- Extend the new human feedback loop from ranking into richer eval generation and regression prioritization
 - Link prompts, tools, notes, traces, checkpoints, and review decisions into richer lineage and analytics views
 
 ## Recommended Execution Order

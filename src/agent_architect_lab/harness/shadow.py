@@ -69,6 +69,8 @@ def run_shadow_suite(
         candidate_report,
         allow_suite_mismatch=allow_suite_mismatch,
         suite_aware_defaults=suite_aware_defaults,
+        feedback_ledger_path=settings.feedback_ledger_path,
+        candidate_report_path=candidate_report_path,
     )
     backfill_path: Path | None = None
     if output_backfill is not None:

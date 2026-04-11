@@ -27,8 +27,8 @@
 3. runtime realism 已经不再只是脚手架，但仍不是完整的 hosted release path。
    planner shadow 能验证 planner 第一步行为，bounded role handoff 也已经能把 release command ownership 结构化表达出来，但默认执行仍然以 heuristic runtime 为主，多角色模式也还停留在 artifact-level，而不是 worker-execution-level。
 
-4. 剩余最大的缺口现在集中在 retrieval 深度、更深入的 feedback learning 和平台部署形态。
-   当前已经把 human feedback 作为一等治理信号记录下来了，但 retrieval 仍然主要是本地 note 的 lexical search，feedback 也还没有真正反哺到自动化 eval generation / ranking，而且系统仍未建成分布式 control plane 或更真实的多租户服务形态。
+4. 剩余最大的缺口现在集中在 retrieval 深度和平台部署形态，feedback learning 已经从被动记录推进到了优先级层。
+   当前已经把 human feedback 作为一等治理信号记录下来，并接进了 incident eval ranking 与 rollout review 上下文。retrieval 仍然主要是本地 note 的 lexical search，而且系统仍未建成分布式 control plane 或更真实的多租户服务形态。
 
 ## 已完成里程碑
 
@@ -71,7 +71,7 @@
 目标：补齐一线 AI 架构师最常被要求承担的 retrieval 与学习闭环能力。
 
 - 把 retrieval 从 note 搜索继续推进到 provenance-aware knowledge routing
-- 把新的 human feedback ledger 继续接进 eval generation、ranking 和 regression prioritization
+- 在已经接入 ranking 的基础上，继续把新的 human feedback ledger 扩展到更丰富的 eval generation 与 regression prioritization
 - 把 prompts、tools、notes、traces、checkpoints、review decisions 继续串成更强的 lineage/analytics 视图
 
 ## 推荐推进顺序

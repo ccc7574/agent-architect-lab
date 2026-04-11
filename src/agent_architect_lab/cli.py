@@ -1004,22 +1004,17 @@ def cmd_check_gates(
 
 
 def cmd_suggest_incident_evals(report: str, output: str) -> int:
-    harness_report = HarnessReport.load(Path(report))
-    suggestions = suggest_incident_evals(harness_report)
+    settings = load_settings()
+    report_path = Path(report)
+    harness_report = HarnessReport.load(report_path)
+    suggestions = suggest_incident_evals(
+        harness_report,
+        feedback_ledger_path=settings.feedback_ledger_path,
+        report_path=str(report_path.resolve()),
+    )
     payload = {
         "count": len(suggestions),
-        "suggestions": [
-            {
-                "task_id": suggestion.task_id,
-                "goal": suggestion.goal,
-                "grader": suggestion.grader,
-                "metadata": suggestion.metadata,
-                "source_run_id": suggestion.source_run_id,
-                "suggested_dataset": suggestion.suggested_dataset,
-                "template_notes": suggestion.template_notes,
-            }
-            for suggestion in suggestions
-        ],
+        "suggestions": [suggestion.to_dict() for suggestion in suggestions],
     }
     print(json.dumps(payload, indent=2))
     if output:
@@ -1051,13 +1046,17 @@ def cmd_rollout_review(
     suite_aware_defaults: bool,
     output_backfill: str,
 ) -> int:
+    settings = load_settings()
     baseline_report = HarnessReport.load(Path(baseline))
-    candidate_report = HarnessReport.load(Path(candidate))
+    candidate_path = Path(candidate)
+    candidate_report = HarnessReport.load(candidate_path)
     review = build_rollout_review(
         baseline_report,
         candidate_report,
         allow_suite_mismatch=allow_suite_mismatch,
         suite_aware_defaults=suite_aware_defaults,
+        feedback_ledger_path=settings.feedback_ledger_path,
+        candidate_report_path=candidate_path,
     )
     print(json.dumps(review.to_dict(), indent=2))
     if output_backfill:

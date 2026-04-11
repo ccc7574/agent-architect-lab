@@ -43,6 +43,7 @@ from agent_architect_lab.cli import (
     cmd_export_operator_handoff_report,
     cmd_release_readiness_digest,
     cmd_release_risk_board,
+    cmd_rollout_review,
     cmd_rollout_matrix,
     cmd_rollback_release,
     cmd_release_status,
@@ -50,11 +51,14 @@ from agent_architect_lab.cli import (
     cmd_run_planner_shadow,
     cmd_run_release_shadow,
     cmd_show_operator_handoff,
+    cmd_suggest_incident_evals,
     cmd_transition_incident,
     cmd_list_feedback,
     cmd_restore_release_and_incident_ledger_backup,
     cmd_verify_release_and_incident_ledger_backup,
 )
+from agent_architect_lab.harness.reporting import HarnessReport
+from agent_architect_lab.models import EvalResult
 
 
 def test_cmd_explain_patterns_outputs_serializable_patterns() -> None:
@@ -754,6 +758,102 @@ def test_cmd_run_release_shadow_can_record_release_and_transition(monkeypatch, t
     assert promote_payload["state"] == "promoted"
     assert status_exit == 0
     assert status_payload["state"] == "promoted"
+
+
+def test_cmd_rollout_review_and_suggest_incident_evals_surface_feedback_priority(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    reports_dir = artifacts_dir / "reports"
+    reports_dir.mkdir(parents=True)
+    monkeypatch.setenv("AGENT_ARCHITECT_LAB_ARTIFACTS", str(artifacts_dir))
+
+    baseline_path = reports_dir / "baseline.json"
+    candidate_path = reports_dir / "candidate.json"
+    HarnessReport(
+        suite_name="demo",
+        results=[
+            EvalResult(
+                task_id="task-1",
+                success=True,
+                score=1.0,
+                steps=1,
+                status="completed",
+                failure_type=None,
+                final_answer="ok",
+                run_id="baseline-run",
+                metadata={"track": "demo"},
+            )
+        ],
+    ).save(baseline_path)
+    HarnessReport(
+        suite_name="demo",
+        results=[
+            EvalResult(
+                task_id="task-1",
+                success=False,
+                score=0.2,
+                steps=3,
+                status="failed",
+                failure_type="planner_timeout",
+                final_answer="timeout",
+                run_id="run-1",
+                metadata={"track": "demo", "goal": "planner follow-up"},
+            )
+        ],
+    ).save(candidate_path)
+
+    with redirect_stdout(io.StringIO()):
+        cmd_record_feedback(
+            "candidate report still needs planner review",
+            "qa-owner",
+            "qa",
+            "neutral",
+            "observe",
+            "report",
+            "",
+            "",
+            str(candidate_path.resolve()),
+            "",
+            "",
+            ["planner"],
+            "",
+        )
+        cmd_record_feedback(
+            "run timeout needs urgent follow-up",
+            "release-manager",
+            "release-manager",
+            "negative",
+            "urgent_followup",
+            "run",
+            "",
+            "",
+            "",
+            "run-1",
+            "",
+            ["planner"],
+            "",
+        )
+
+    suggest_buffer = io.StringIO()
+    with redirect_stdout(suggest_buffer):
+        suggest_exit = cmd_suggest_incident_evals(str(candidate_path), "")
+    suggest_payload = json.loads(suggest_buffer.getvalue())
+
+    rollout_buffer = io.StringIO()
+    with redirect_stdout(rollout_buffer):
+        rollout_exit = cmd_rollout_review(str(baseline_path), str(candidate_path), False, True, "")
+    rollout_payload = json.loads(rollout_buffer.getvalue())
+
+    assert suggest_exit == 0
+    assert suggest_payload["suggestions"][0]["matched_feedback_count"] == 2
+    assert suggest_payload["suggestions"][0]["priority_score"] > 0
+    assert any("human feedback" in reason for reason in suggest_payload["suggestions"][0]["priority_reasons"])
+    assert rollout_exit == 1
+    assert rollout_payload["feedback_summary"]["matched_feedback_count"] == 2
+    assert rollout_payload["feedback_summary"]["urgent_feedback_count"] == 1
+    assert rollout_payload["candidate_incident_suggestions"][0]["matched_feedback_count"] == 2
 
 
 def test_cmd_deploy_and_rollback_release(monkeypatch, tmp_path: Path) -> None:

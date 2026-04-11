@@ -40,6 +40,15 @@ PYTHONPATH=src python3 -m agent_architect_lab.cli list-feedback --release-name 2
 PYTHONPATH=src python3 -m agent_architect_lab.cli feedback-summary --release-name 2026-04-10-main
 ```
 
+反馈现在也会反哺 incident backfill 排序：
+
+```bash
+PYTHONPATH=src python3 -m agent_architect_lab.cli suggest-incident-evals \
+  artifacts/reports/candidate.json
+```
+
+`suggest-incident-evals` 和 `rollout-review` 现在会把 negative / urgent / label 对齐的人类反馈计入优先级，而不是只按 failure type 做静态排序。
+
 ## Control Plane
 
 读接口：
@@ -84,3 +93,4 @@ curl \
 - 它具体指向哪个 release、incident、report、run 或 artifact
 
 补上这一层之后，governance summary、weekly status、release runbook、release command brief、incident bundle 都能带出显式的人类反馈信号，而不再只依赖系统自动生成的状态。
+现在 incident backfill 队列本身也会被这些反馈信号重新排序，最急迫的 eval gap 会被优先暴露出来。
