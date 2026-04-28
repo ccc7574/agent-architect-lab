@@ -34,6 +34,14 @@
 | 8 | 发布系统 | 看 approval、promotion、rollout、rollback、override、control plane 如何组合 | `docs/RELEASE_LEDGER_ZH.md`, `docs/PRODUCTION_RELEASE_SYSTEM_PLAN_ZH.md`, `docs/CONTROL_PLANE_ZH.md` |
 | 9 | 模型 planner 灰度 | 在信任 model-backed planner 之前，先理解 provider、shadow run 和 runtime realism | `docs/PLANNER_PROVIDERS.md`, `docs/SHADOW_RUNS.md`, `docs/RUNTIME_REALISM_ZH.md` |
 
+## 辅助学习材料
+
+| 材料 | 适合什么时候看 | 文件 |
+| --- | --- | --- |
+| 代码导览 | 想按执行链路读懂 CLI、runtime、tool、MCP、harness 时 | `docs/code-walkthrough.zh-CN.md` |
+| 设计原则 | 想理解为什么要拆 runtime、registry、skill、harness、release governance 时 | `docs/design-principles.zh-CN.md` |
+| Lab 01 | 想用 15 分钟跑通最小 Agent 执行链路时 | `docs/learning-labs/lab-01-run-the-minimal-path.zh-CN.md` |
+
 ## 快速开始
 
 从源码运行：
