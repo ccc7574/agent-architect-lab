@@ -19,6 +19,19 @@ The repository is intentionally small, but now includes:
 - A bounded role-handoff release command brief for QA, ops, incident command, and release management
 - Documentation aimed at a senior agent architect growth path
 
+## Reading Order
+
+| Order | Start Here | What to Focus On | Related Files |
+| --- | --- | --- | --- |
+| 1 | Project overview | Understand the lab as an agent product platform, not a one-off demo | `README.md`, `docs/LEARNING_PATH.md` |
+| 2 | Runtime architecture | Follow the execution path from CLI to runtime, planner, tools, memory, and traces | `docs/ARCHITECTURE.md`, `src/agent_architect_lab/agent/` |
+| 3 | Skills and knowledge routing | See how reusable skills and note-backed retrieval sit above raw tools | `data/skills/`, `data/notes/`, `docs/KNOWLEDGE_ROUTING.md` |
+| 4 | MCP integration | Understand protocol boundaries, adapters, and the local note server | `src/agent_architect_lab/mcp/`, `scripts/run_mcp_server.py` |
+| 5 | Harness and eval gates | Learn how tasks, grading, reports, and release gates keep agent changes disciplined | `docs/HARNESS_PRACTICES.md`, `docs/EVALS_AND_SAFEGUARDS_ROADMAP.md` |
+| 6 | Incidents and feedback | Connect failures, human review, backfills, and governance summaries | `docs/OPS_AND_INCIDENTS.md`, `docs/INCIDENT_BACKFILL.md`, `docs/HUMAN_FEEDBACK.md` |
+| 7 | Release system | Study approval, promotion, rollout, rollback, overrides, and control-plane operations | `docs/RELEASE_LEDGER.md`, `docs/PRODUCTION_RELEASE_SYSTEM_PLAN.md`, `docs/CONTROL_PLANE.md` |
+| 8 | Model-backed rollout | Read planner provider and shadow-run docs before trusting model-backed planning | `docs/PLANNER_PROVIDERS.md`, `docs/SHADOW_RUNS.md`, `docs/RUNTIME_REALISM.md` |
+
 ## Project Layout
 
 - `src/agent_architect_lab/agent`: runtime, memory, planning patterns
