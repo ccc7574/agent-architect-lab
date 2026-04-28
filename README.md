@@ -1,5 +1,7 @@
 # Agent Architect Lab
 
+Chinese README: `README.zh-CN.md`
+
 `agent-architect-lab` is a hands-on learning project for building, testing, and evolving agent systems with the same core concerns used in serious AI products: runtime design, tool use, MCP integration, memory, safety, harnesses, and skills.
 
 The repository is intentionally small, but now includes:
